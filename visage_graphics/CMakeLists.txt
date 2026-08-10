@@ -28,6 +28,12 @@ if (APPLE)
   find_library(METAL_LIBRARY Metal)
   find_library(METALKIT_LIBRARY MetalKit)
   set(METAL_LIBS ${METAL_LIBRARY} ${METALKIT_LIBRARY})
+  # The emoji rasterizer calls CoreText. On macOS that arrives through the
+  # AppKit umbrella; on iOS it has to be linked explicitly.
+  if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    find_library(CORETEXT_LIBRARY CoreText)
+    list(APPEND METAL_LIBS ${CORETEXT_LIBRARY})
+  endif ()
 elseif (UNIX)
   add_definitions(-D_LARGEFILE64_SOURCE)
 endif ()
