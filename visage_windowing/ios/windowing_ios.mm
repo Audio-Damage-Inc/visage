@@ -43,7 +43,39 @@ namespace visage {
 
     CAMetalLayer* metal_layer_ = nullptr;
   };
+
+  // Set by WindowIos::runEventLoop before UIApplicationMain, read back by the
+  // app delegate once UIKit is up. Standalone is single-window by definition,
+  // so a single pointer is enough.
+  WindowIos* standalone_window = nullptr;
 }
+
+@implementation VisageAppDelegate
+
+- (BOOL)application:(UIApplication*)application
+    didFinishLaunchingWithOptions:(NSDictionary*)options {
+  self.window = [[UIWindow alloc] initWithFrame:[[UIScreen mainScreen] bounds]];
+
+  UIViewController* root = [[UIViewController alloc] init];
+  self.window.rootViewController = root;
+
+  visage::WindowIos* window = visage::standalone_window;
+  if (window) {
+    UIView* content = window->contentView();
+    content.frame = root.view.bounds;
+    content.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    [root.view addSubview:content];
+
+    CGFloat scale = [[UIScreen mainScreen] nativeScale];
+    window->handleNativeResize(root.view.bounds.size.width * scale,
+                               root.view.bounds.size.height * scale);
+  }
+
+  [self.window makeKeyAndVisible];
+  return YES;
+}
+
+@end
 
 // =============================================================================
 // VisageMetalViewDelegate — drives the render loop
@@ -220,7 +252,22 @@ namespace visage {
   }
 
   void WindowIos::runEventLoop() {
-    [[NSRunLoop mainRunLoop] run];
+    // Embedded (AUv3): the host owns the app and the run loop already turns.
+    if (parent_view_) {
+      [[NSRunLoop mainRunLoop] run];
+      return;
+    }
+
+    // Standalone: hand off to UIKit. UIApplicationMain does not return, which
+    // matches what callers expect of runEventLoop.
+    visage::standalone_window = this;
+    @autoreleasepool {
+      UIApplicationMain(0, nullptr, nil, NSStringFromClass([VisageAppDelegate class]));
+    }
+  }
+
+  UIView* WindowIos::contentView() const {
+    return view_;
   }
 
   void* WindowIos::initWindow() const {

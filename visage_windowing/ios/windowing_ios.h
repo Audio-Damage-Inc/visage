@@ -44,6 +44,13 @@ namespace visage {
 - (instancetype)initWithFrame:(CGRect)frame inWindow:(visage::WindowIos*)window;
 @end
 
+// Standalone apps only. An embedded window (AUv3) is handed a parent UIView by
+// the host, but a standalone one has no UIApplication at all until this runs:
+// visage's event loop is an NSRunLoop, which never starts UIKit's lifecycle.
+@interface VisageAppDelegate : UIResponder <UIApplicationDelegate>
+@property(nonatomic, strong) UIWindow* window;
+@end
+
 namespace visage {
   class WindowIos : public Window {
   public:
@@ -64,6 +71,8 @@ namespace visage {
     IPoint maxWindowDimensions() const override;
 
     void handleNativeResize(int width, int height);
+    // The Metal view, for the standalone app delegate to install in its window.
+    UIView* contentView() const;
 
   private:
     UIView* parent_view_ = nullptr;
