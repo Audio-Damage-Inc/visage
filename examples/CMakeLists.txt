@@ -31,6 +31,27 @@ foreach (EXAMPLE ${EXAMPLES})
       set_target_properties(Example${EXAMPLE} PROPERTIES WIN32_EXECUTABLE YES)
     elseif (APPLE)
       set(EXAMPLE_NAME Example${EXAMPLE})
+      string(TOLOWER "${EXAMPLE}" EXAMPLE_ID_SUFFIX)
+      set(EXAMPLE_IDENTIFIER "com.visage.example.${EXAMPLE_ID_SUFFIX}")
+      if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
+        set(EXAMPLE_PLATFORM_KEYS
+"    <key>UILaunchScreen</key>
+    <dict/>
+    <key>UISupportedInterfaceOrientations</key>
+    <array>
+        <string>UIInterfaceOrientationPortrait</string>
+        <string>UIInterfaceOrientationLandscapeLeft</string>
+        <string>UIInterfaceOrientationLandscapeRight</string>
+    </array>")
+      else ()
+        set(EXAMPLE_PLATFORM_KEYS
+"    <key>LSMinimumSystemVersion</key>
+    <string>10.15</string>
+    <key>NSPrincipalClass</key>
+    <string>NSApplication</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>")
+      endif ()
       configure_file(Info.plist.in ${CMAKE_CURRENT_BINARY_DIR}/${EXAMPLE}/ExampleInfo.plist)
       set_target_properties(Example${EXAMPLE} PROPERTIES
         MACOSX_BUNDLE TRUE

@@ -20,12 +20,7 @@
     <string>${CMAKE_PROJECT_VERSION}</string>
     <key>CFBundleVersion</key>
     <string>${CMAKE_PROJECT_VERSION}</string>
-    <key>LSMinimumSystemVersion</key>
-    <string>10.15</string>
-    <key>NSPrincipalClass</key>
-    <string>NSApplication</string>
-    <key>NSHighResolutionCapable</key>
-    <true/>
+${EXAMPLE_PLATFORM_KEYS}
 </dict>
 </plist>
 
