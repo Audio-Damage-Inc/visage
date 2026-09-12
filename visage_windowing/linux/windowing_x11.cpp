@@ -1107,8 +1107,21 @@ namespace visage {
           drawCallback(microseconds / 1000000.0);
         }
       }
-      else if (event.xany.window == window_handle_ || event.xany.window == parent_handle_)
+      else if (event.xany.window == window_handle_ || event.xany.window == parent_handle_) {
+        // Rebuild the framebuffer the first time the window is actually exposed.
+        // runEventLoop() does this for top level windows; without it here the
+        // plugin window's swapchain is created before the window is really up and
+        // presents nothing, so the editor draws one frame and freezes until the
+        // user resizes it by hand. Only bites under XWayland; plain X11 tolerates
+        // the early swapchain.
+        if (event.type == Expose && !exposed_) {
+          exposed_ = true;
+          const int height = clientHeight();
+          handleResized(clientWidth(), height + 1);
+          handleResized(clientWidth(), height);
+        }
         processEvent(event);
+      }
     }
   }
 

@@ -110,7 +110,9 @@ namespace visage {
     startRenderThread();
 
     bgfx::Init bgfx_init;
-    bgfx_init.resolution.numBackBuffers = 1;
+    // One back buffer leaves nothing to acquire after the first present, so a
+    // window's swapchain stops updating once it has shown a single frame.
+    bgfx_init.resolution.numBackBuffers = 2;
     bgfx_init.resolution.width = 0;
     bgfx_init.resolution.height = 0;
     bgfx_init.callback = callback_handler_.get();

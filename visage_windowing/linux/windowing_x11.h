@@ -270,6 +270,7 @@ namespace visage {
 
     X11Connection* x11_ = nullptr;
     std::unique_ptr<X11Connection> plugin_x11_;
+    bool exposed_ = false;
     DragDropOutState drag_drop_out_state_;
     std::vector<std::string> drag_drop_files_;
     int drag_drop_target_x_ = 0;
