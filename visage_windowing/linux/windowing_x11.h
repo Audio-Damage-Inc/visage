@@ -29,6 +29,7 @@
 #include <map>
 #include <thread>
 #include <X11/Xatom.h>
+#include <X11/XKBlib.h>
 #include <X11/Xlib.h>
 
 namespace visage {
@@ -91,6 +92,14 @@ namespace visage {
 
       fd_ = ConnectionNumber(display_);
       root_ = DefaultRootWindow(display_);
+      // Without this, a held key arrives as a KeyRelease/KeyPress pair at the
+      // repeat rate, which is indistinguishable from the user retyping it --
+      // and KeyEvent::isRepeat() reports false for every one of them, because
+      // the synthetic release clears pressed_ first. Anything that acts on a
+      // release (a computer-MIDI keyboard, a push-to-hold control) would
+      // machine-gun. Detectable auto-repeat suppresses the synthetic release,
+      // so a held key is one press, N repeats, one release.
+      XkbSetDetectableAutoRepeat(display_, True, nullptr);
       XSetWindowAttributes attributes;
       attributes.event_mask = NoEventMask;
       XSync(display_, false);
