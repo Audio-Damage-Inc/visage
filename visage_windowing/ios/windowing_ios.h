@@ -36,12 +36,43 @@ namespace visage {
 @property long long start_microseconds;
 @end
 
+// The keyboard's text target: a view of no size, parented to the Metal view,
+// that holds first responder only while visage has a text entry focused. Its
+// UIKeyInput is what brings up the software keyboard, so the keyboard shows
+// for a text field and never otherwise. Hardware keys reach it too while it
+// holds first responder, and go to visage the way the Metal view sends them.
+@interface VisageTextInputView : UIView <UIKeyInput>
+@property(nonatomic) visage::WindowIos* visage_window;
+@property(nonatomic) UITextAutocorrectionType autocorrectionType;
+@property(nonatomic) UITextAutocapitalizationType autocapitalizationType;
+@property(nonatomic) UITextSpellCheckingType spellCheckingType;
+@property(nonatomic) UITextSmartQuotesType smartQuotesType;
+@property(nonatomic) UITextSmartDashesType smartDashesType;
+@property(nonatomic) UITextSmartInsertDeleteType smartInsertDeleteType;
+@property(nonatomic) UIReturnKeyType returnKeyType;
+// Presses visage did not use, handed up the responder chain on the way down
+// and so owed to it on the way up.
+@property(nonatomic, strong) NSMutableSet<UIPress*>* forwarded_presses;
+@end
+
 @interface VisageMetalView : MTKView
 @property(nonatomic) visage::WindowIos* visage_window;
 @property(nonatomic, strong) NSMapTable<UITouch*, NSNumber*>* active_touches;
 @property(nonatomic) int next_pointer_id;
+@property(nonatomic, strong) VisageTextInputView* text_input;
+// Whether visage had a text entry focused when last looked at.
+@property(nonatomic) BOOL text_entry_shown;
+@property(nonatomic, strong) NSMutableSet<UIPress*>* forwarded_presses;
 
 - (instancetype)initWithFrame:(CGRect)frame inWindow:(visage::WindowIos*)window;
+// Once a frame: moves first responder to the text input when visage's text
+// entry starts and back to this view when it ends. Acts only on the change,
+// so a host that has taken the keyboard since is left alone.
+- (void)syncTextInput;
+// After a touch: whichever of the two should have the keyboard takes it.
+// A touch is the user choosing this view, which is what makes taking the
+// keyboard from wherever it was the right thing to do.
+- (void)claimKeyboard;
 @end
 
 // Standalone apps only. An embedded window (AUv3) is handed a parent UIView by
