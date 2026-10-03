@@ -368,6 +368,10 @@ namespace visage {
     setColorMult(layer.hdr());
     setOriginFlipUniform(layer.bottomLeftOrigin());
     Shader* shader = batches[0].shapes->front().shader;
+    setUniform<Uniforms::kShaderValues0>(shader->values(0));
+    setUniform<Uniforms::kShaderValues1>(shader->values(1));
+    setUniform<Uniforms::kShaderValues2>(shader->values(2));
+    setUniform<Uniforms::kShaderValues3>(shader->values(3));
     bgfx::submit(submit_pass,
                  ProgramCache::programHandle(shader->vertexShader(), shader->fragmentShader()));
   }

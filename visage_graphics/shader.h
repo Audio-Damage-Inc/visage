@@ -38,7 +38,22 @@ namespace visage {
     const EmbeddedFile& fragmentShader() const { return fragment_shader_; }
     BlendMode state() const { return state_; }
 
+    // Values for the fragment shader, read at submit as the uniforms
+    // u_shader_values0 .. u_shader_values3. A shader that declares none
+    // ignores them.
+    static constexpr int kNumValueSlots = 4;
+    void setValues(int slot, float x, float y = 0.0f, float z = 0.0f, float w = 0.0f) {
+      if (slot < 0 || slot >= kNumValueSlots)
+        return;
+      values_[slot * 4 + 0] = x;
+      values_[slot * 4 + 1] = y;
+      values_[slot * 4 + 2] = z;
+      values_[slot * 4 + 3] = w;
+    }
+    const float* values(int slot) const { return values_ + slot * 4; }
+
   private:
+    float values_[kNumValueSlots * 4] = {};
     EmbeddedFile vertex_shader_;
     EmbeddedFile fragment_shader_;
     BlendMode state_ = BlendMode::Alpha;

@@ -24,6 +24,10 @@
 namespace visage {
   struct Uniforms {
     static constexpr char kTime[] = "u_time";
+    static constexpr char kShaderValues0[] = "u_shader_values0";
+    static constexpr char kShaderValues1[] = "u_shader_values1";
+    static constexpr char kShaderValues2[] = "u_shader_values2";
+    static constexpr char kShaderValues3[] = "u_shader_values3";
     static constexpr char kMult[] = "u_mult";
     static constexpr char kTextureClamp[] = "u_texture_clamp";
     static constexpr char kBounds[] = "u_bounds";
