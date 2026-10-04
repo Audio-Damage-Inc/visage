@@ -103,6 +103,10 @@ namespace visage {
 
   void WindowEventHandler::handleResized(int width, int height) {
     VISAGE_ASSERT(width >= 0 && height >= 0);
+    // A move to a screen with another backing scale arrives as a resize. The
+    // frame divides the native size by ITS scale, so the window's has to be
+    // in it first, or the tree is laid out in the old scale's units.
+    content_frame_->setDpiScale(window_->dpiScale());
     content_frame_->setNativeBounds(0, 0, width, height);
     content_frame_->redraw();
   }
@@ -397,13 +401,14 @@ namespace visage {
 
   void WindowEventHandler::handleMouseWheel(float delta_x, float delta_y, float precise_x,
                                             float precise_y, int x, int y, int button_state,
-                                            int modifiers, bool momentum) {
+                                            int modifiers, bool momentum, bool reversed) {
     MouseEvent mouse_event = mouseEvent(x, y, button_state, modifiers);
     mouse_event.wheel_delta_x = delta_x;
     mouse_event.wheel_delta_y = delta_y;
     mouse_event.precise_wheel_delta_x = precise_x;
     mouse_event.precise_wheel_delta_y = precise_y;
     mouse_event.wheel_momentum = momentum;
+    mouse_event.wheel_reversed = reversed;
 
     mouse_hovered_frame_ = content_frame_->frameAtPoint(mouse_event.window_position);
     if (mouse_hovered_frame_) {

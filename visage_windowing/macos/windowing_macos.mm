@@ -502,7 +502,8 @@ namespace visage {
   }
   self.visage_window->handleMouseWheel(delta_x, delta_y, precise_x, precise_y, point.x, point.y,
                                        [self mouseButtonState], [self keyboardModifiers:event],
-                                       [event momentumPhase] != NSEventPhaseNone);
+                                       [event momentumPhase] != NSEventPhaseNone,
+                                       [event isDirectionInvertedFromDevice]);
 }
 
 - (void)mouseMoved:(NSEvent*)event {
@@ -612,6 +613,10 @@ namespace visage {
 }
 
 - (void)viewDidChangeBackingProperties {
+  // Before super as well as after: MTKView resizes its drawable in there,
+  // and that resize has to find the new scale already set.
+  if (self.visage_window)
+    self.visage_window->resetBackingScale();
   [super viewDidChangeBackingProperties];
   if (self.visage_window)
     self.visage_window->resetBackingScale();
@@ -951,8 +956,25 @@ namespace visage {
   }
 
   void WindowMac::resetBackingScale() {
-    if (window_handle_)
-      setDpiScale([window_handle_ backingScaleFactor]);
+    if (window_handle_ == nullptr)
+      return;
+
+    const float scale = [window_handle_ backingScaleFactor];
+    if (scale <= 0.0f)
+      return;
+
+    setDpiScale(scale);
+
+    // The view keeps its size in points across a screen change; it is the
+    // pixel size that moves. A plugin window is also built at the main
+    // screen's scale, which need not be the scale of the screen its host
+    // window is on. Either way the client size goes stale, so put it back
+    // to the points times the scale actually in force.
+    NSSize points = [view_ bounds].size;
+    int width = std::round(points.width * scale);
+    int height = std::round(points.height * scale);
+    if (width > 0 && height > 0 && (width != clientWidth() || height != clientHeight()))
+      handleResized(width, height);
   }
 
   void WindowMac::windowContentsResized(int width, int height) {

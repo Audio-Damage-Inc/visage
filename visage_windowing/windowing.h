@@ -62,9 +62,12 @@ namespace visage {
                                  int modifiers, int repeat_clicks, int pointer_id = 0) = 0;
       virtual void handleMouseEnter(int x, int y) = 0;
       virtual void handleMouseLeave(int last_x, int last_y, int button_state, int modifiers) = 0;
+      // `reversed`: the platform has inverted the deltas from the physical
+      // gesture (macOS natural scrolling), so a control that should follow the
+      // finger rather than scroll content can turn them back.
       virtual void handleMouseWheel(float delta_x, float delta_y, float precise_x, float precise_y,
                                     int mouse_x, int mouse_y, int button_state, int modifiers,
-                                    bool momentum) = 0;
+                                    bool momentum, bool reversed) = 0;
 
       virtual bool handleKeyDown(KeyCode key_code, int modifiers, bool repeat) = 0;
       virtual bool handleKeyUp(KeyCode key_code, int modifiers) = 0;
@@ -164,9 +167,10 @@ namespace visage {
     void handleMouseLeave(int button_state, int modifiers);
 
     void handleMouseWheel(float delta_x, float delta_y, float precise_x, float precise_y, int x,
-                          int y, int button_state, int modifiers, bool momentum = false);
+                          int y, int button_state, int modifiers, bool momentum = false,
+                          bool reversed = false);
     void handleMouseWheel(float delta_x, float delta_y, int x, int y, int button_state,
-                          int modifiers, bool momentum = false);
+                          int modifiers, bool momentum = false, bool reversed = false);
 
     void handleFocusLost();
     void handleFocusGained();

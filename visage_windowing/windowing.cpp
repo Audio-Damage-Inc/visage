@@ -173,8 +173,15 @@ namespace visage {
     if (event_handler_ == nullptr)
       return;
 
-    if (pointer_id == 0)
+    // The press is where relative mode holds the pointer, should the frame
+    // under it turn the mode on. The last move is not always there: a click
+    // can land with no move before it, and the anchor would be off by however
+    // far the pointer went unseen -- an offset every warped drag event then
+    // reads as movement.
+    if (pointer_id == 0) {
       setMouseRelativeMode(false);
+      last_window_mouse_position_ = { x, y };
+    }
 
     auto& repeat = pointer_repeat_clicks_[pointer_id];
     long long current_ms = time::milliseconds();
@@ -212,15 +219,17 @@ namespace visage {
   }
 
   void Window::handleMouseWheel(float delta_x, float delta_y, float precise_x, float precise_y,
-                                int x, int y, int button_state, int modifiers, bool momentum) {
+                                int x, int y, int button_state, int modifiers, bool momentum,
+                                bool reversed) {
     if (event_handler_)
       event_handler_->handleMouseWheel(delta_x, delta_y, precise_x, precise_y, x, y, button_state,
-                                       modifiers, momentum);
+                                       modifiers, momentum, reversed);
   }
 
   void Window::handleMouseWheel(float delta_x, float delta_y, int x, int y, int button_state,
-                                int modifiers, bool momentum) {
-    handleMouseWheel(delta_x, delta_y, delta_x, delta_y, x, y, button_state, modifiers, momentum);
+                                int modifiers, bool momentum, bool reversed) {
+    handleMouseWheel(delta_x, delta_y, delta_x, delta_y, x, y, button_state, modifiers, momentum,
+                     reversed);
   }
 
   bool Window::isDragDropSource() const {
