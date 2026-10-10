@@ -54,8 +54,11 @@ namespace visage {
     }
 
     static X11Connection* globalInstance() {
-      static X11Connection connection;
-      return &connection;
+      // Never closed. bgfx is not shut down at exit, so the Vulkan driver still
+      // holds this display; NVIDIA's exit handler uses it after static
+      // destruction and aborts if it has been closed.
+      static X11Connection* connection = new X11Connection();
+      return connection;
     }
 
     class DisplayLock {

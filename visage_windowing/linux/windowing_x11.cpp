@@ -326,6 +326,9 @@ namespace visage {
                          DisplayWidthMM(display, default_screen);
 
           result.dpi = std::round(result.dpi * kDpiAdjustment) / kDpiAdjustment;
+          // A big low-res monitor reports under 96 dpi. Never scale below 1: the
+          // window shrinks but the frames inside it do not, and it draws cropped.
+          result.dpi = std::max(result.dpi, Window::kDefaultDpi);
           result.refresh_rate = refreshRate(screen_resources, info);
         }
         XRRFreeCrtcInfo(info);
