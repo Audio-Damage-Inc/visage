@@ -305,9 +305,16 @@ namespace visage {
     long long start_us_ = 0;
   };
 
+  // Scopes the thread's DPI awareness. Given a window, the thread takes that
+  // window's: a plugin's window lives inside its host's, and when the host's is
+  // not DPI aware -- Live with Auto-Scale Plug-In Window on -- Windows scales it
+  // as a bitmap, which only adds up if everything inside it is unaware too: 96
+  // DPI, and the host's own pixels. A per monitor aware child in there renders
+  // at the monitor's scale into a window Windows then stretches again. Without
+  // a window, per monitor aware, as a standalone window is.
   class DpiAwareness {
   public:
-    DpiAwareness() {
+    explicit DpiAwareness(HWND match = nullptr) {
       HMODULE user32 = LoadLibraryA("user32.dll");
       if (user32 == nullptr)
         return;
@@ -324,6 +331,17 @@ namespace visage {
       }
 
       previous_dpi_awareness_ = threadDpiAwarenessContext_();
+
+      auto windowDpiAwarenessContext =
+          procedure<GetWindowDpiAwarenessContext_t>(user32, "GetWindowDpiAwarenessContext");
+      if (match != nullptr && windowDpiAwarenessContext != nullptr) {
+        DPI_AWARENESS_CONTEXT window_awareness = windowDpiAwarenessContext(match);
+        if (window_awareness != nullptr && setThreadDpiAwarenessContext_(window_awareness)) {
+          dpi_awareness_ = window_awareness;
+          return;
+        }
+      }
+
       dpi_awareness_ = DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2;
       if (!setThreadDpiAwarenessContext_(dpi_awareness_)) {
         dpi_awareness_ = DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE;
@@ -626,7 +644,7 @@ namespace visage {
 
     HRESULT STDMETHODCALLTYPE DragEnter(IDataObject* data_object, DWORD key_state, POINTL point,
                                         DWORD* effect) override {
-      DpiAwareness dpi_awareness;
+      DpiAwareness dpi_awareness(window_->parentHandle());
       IPoint position = dragPosition(point);
       files_ = dropFileList(data_object);
       if (window_->handleFileDrag(position.x, position.y, files_))
@@ -637,7 +655,7 @@ namespace visage {
     }
 
     HRESULT STDMETHODCALLTYPE DragOver(DWORD key_state, POINTL point, DWORD* effect) override {
-      DpiAwareness dpi_awareness;
+      DpiAwareness dpi_awareness(window_->parentHandle());
       IPoint position = dragPosition(point);
       if (window_->handleFileDrag(position.x, position.y, files_))
         *effect = DROPEFFECT_COPY;
@@ -653,7 +671,7 @@ namespace visage {
 
     HRESULT STDMETHODCALLTYPE Drop(IDataObject* data_object, DWORD key_state, POINTL point,
                                    DWORD* effect) override {
-      DpiAwareness dpi_awareness;
+      DpiAwareness dpi_awareness(window_->parentHandle());
       IPoint position = dragPosition(point);
       files_ = dropFileList(data_object);
       if (window_->handleFileDrop(position.x, position.y, files_))
@@ -1476,14 +1494,15 @@ namespace visage {
   WindowWin32::WindowWin32(int width, int height, void* parent_handle) : Window(width, height) {
     static constexpr int kWindowFlags = WS_CHILD;
 
-    DpiAwareness dpi_awareness;
-    setDpiScale(dpi_awareness.dpiScale());
+    // Created in the host window's DPI awareness, and scaled by its own DPI
+    // rather than the system's: 96 in a host window Windows is scaling.
+    parent_handle_ = static_cast<HWND>(parent_handle);
+    DpiAwareness dpi_awareness(parent_handle_);
 
     registerWindowClass();
     window_class_.lpfnWndProc = windowProcedure;
     RegisterClassEx(&window_class_);
 
-    parent_handle_ = static_cast<HWND>(parent_handle);
     std::string app_name = VISAGE_APPLICATION_NAME;
     window_handle_ = CreateWindow(window_class_.lpszClassName,
                                   String::convertToWide(app_name).c_str(), kWindowFlags, 0, 0, width,
@@ -1492,6 +1511,7 @@ namespace visage {
       VISAGE_LOG("Error creating window");
       return;
     }
+    setDpiScale(dpi_awareness.dpiScale(window_handle_));
 
     SetWindowLongPtr(window_handle_, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
 
@@ -1533,7 +1553,7 @@ namespace visage {
     if (window_handle_ == nullptr)
       return;
 
-    DpiAwareness dpi_awareness;
+    DpiAwareness dpi_awareness(parent_handle_);
     RECT rect;
     GetWindowRect(window_handle_, &rect);
     int x = rect.left;
@@ -1643,7 +1663,7 @@ namespace visage {
     // TODO: Plugin window doesn't scale right if you resize the windows using
     // a key command and parent window was not dpi aware
 
-    DpiAwareness dpi_awareness;
+    DpiAwareness dpi_awareness(parent_handle_);
 
     bool character = message->message == WM_CHAR || message->message == WM_SYSCHAR;
     bool key_down = message->message == WM_KEYDOWN || message->message == WM_SYSKEYDOWN;
@@ -1723,18 +1743,23 @@ namespace visage {
   }
 
   void WindowWin32::handleResizeEnd(HWND hwnd) {
+    // First: the size is read in the window's own pixels, not those of
+    // whatever awareness the calling thread happens to have -- a host's thread
+    // can differ from the window it hosts, and the frame was then laid out at
+    // a size the window is not.
+    DpiAwareness dpi_awareness(parent_handle_);
     IBounds borders = windowBorderSize(hwnd);
     RECT rect;
     GetWindowRect(hwnd, &rect);
     int width = rect.right - rect.left - borders.width();
     int height = rect.bottom - rect.top - borders.height();
 
-    DpiAwareness dpi_awareness;
     setDpiScale(dpi_awareness.dpiScale(hwnd));
     handleResized(width, height);
   }
 
   void WindowWin32::handleDpiChange(HWND hwnd, LPARAM l_param, WPARAM w_param) {
+    DpiAwareness dpi_awareness(parent_handle_);
     IBounds borders = windowBorderSize(hwnd);
     RECT* suggested = reinterpret_cast<RECT*>(l_param);
     int width = suggested->right - suggested->left - borders.width();
@@ -1742,7 +1767,6 @@ namespace visage {
 
     handleAdjustResize(&width, &height, true, true);
 
-    DpiAwareness dpi_awareness;
     setDpiScale(dpi_awareness.dpiScale(hwnd));
     handleResized(width, height);
     SetWindowPos(hwnd, nullptr, suggested->left, suggested->top, width + borders.width(),
