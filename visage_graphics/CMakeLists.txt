@@ -34,12 +34,14 @@ if (APPLE)
   find_library(METALKIT_LIBRARY MetalKit)
   find_library(QUARTZCORE_LIBRARY QuartzCore)
   set(METAL_LIBS ${METAL_LIBRARY} ${METALKIT_LIBRARY} ${QUARTZCORE_LIBRARY})
-  # The emoji rasterizer calls CoreText. On macOS that arrives through the
-  # AppKit umbrella; on iOS it has to be linked explicitly.
+  # The emoji rasterizer calls CoreText and CoreGraphics, and the Metal backend
+  # CoreGraphics. On macOS those arrive through the AppKit umbrella; on iOS they
+  # have to be linked explicitly.
   if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
     find_library(CORETEXT_LIBRARY CoreText)
+    find_library(COREGRAPHICS_LIBRARY CoreGraphics)
     find_library(UIKIT_LIBRARY UIKit)
-    list(APPEND METAL_LIBS ${CORETEXT_LIBRARY} ${UIKIT_LIBRARY})
+    list(APPEND METAL_LIBS ${CORETEXT_LIBRARY} ${COREGRAPHICS_LIBRARY} ${UIKIT_LIBRARY})
   else ()
     find_library(APPKIT_LIBRARY AppKit)
     list(APPEND METAL_LIBS ${APPKIT_LIBRARY})
