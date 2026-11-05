@@ -25,6 +25,9 @@
 #include "visage_utils/time_utils.h"
 
 namespace visage {
+  // A finger's second tap lands further from its first than a mouse's second click does.
+  static constexpr int kDoubleTapDistance = 22;
+
   Window::Window() {
     Thread::setAsMainThread();
   }
@@ -181,7 +184,7 @@ namespace visage {
     long long current_ms = time::milliseconds();
     long long delta_ms = current_ms - repeat.last_click_ms;
     IPoint delta = IPoint(x, y) - repeat.first_click_position;
-    float max_distance = kDoubleClickDistance * dpi_scale_;
+    float max_distance = (isMobileDevice() ? kDoubleTapDistance : kDoubleClickDistance) * dpi_scale_;
     bool same_place = std::abs(delta.x) <= max_distance && std::abs(delta.y) <= max_distance;
     if (delta_ms > 0 && delta_ms < doubleClickSpeed() && same_place && button_id == repeat.last_button)
       repeat.click_count++;
