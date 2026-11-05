@@ -19,6 +19,7 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
+#include "embedded/fonts.h"
 #include "visage_graphics/canvas.h"
 #include "visage_graphics/font.h"
 #include "visage_ui/popup_menu.h"
@@ -189,6 +190,22 @@ TEST_CASE("PopupMenu show functionality", "[ui]") {
   SECTION("Show with kNotSet position") {
     menu.show(&source_frame, { PopupMenu::kNotSet, PopupMenu::kNotSet });
   }
+}
+
+TEST_CASE("PopupMenu flips above point when it overflows the bottom", "[ui]") {
+  Frame root;
+  Frame source;
+  root.setBounds(0, 0, 400, 1000);
+  root.addChild(source);
+  source.setBounds(0, 500, 400, 400);
+
+  PopupMenu menu;
+  for (int i = 0; i < 10; ++i)
+    menu.addOption(i, "Option");
+  menu.show(&source, { 10, 300 });
+
+  Frame* list = root.children().back()->children()[0];
+  REQUIRE(list->y() + list->height() == 800);
 }
 
 TEST_CASE("PopupMenu native menu bar", "[ui]") {
@@ -418,8 +435,400 @@ TEST_CASE("ValueDisplay functionality", "[ui]") {
 
 TEST_CASE("PopupMenuFrame constants", "[ui]") {
   SECTION("Constant values") {
-    REQUIRE(PopupMenuFrame::kMaxSubMenus == 4);
     REQUIRE(PopupMenuFrame::kWaitForSelection == 20);
     REQUIRE(PopupMenuFrame::kPauseMs == 400);
+  }
+}
+
+static PopupMenuFrame* showMenu(PopupMenu& menu, Frame& root, Frame& source) {
+  root.setBounds(0, 0, 400, 300);
+  root.addChild(source);
+  source.setBounds(0, 0, 400, 300);
+  menu.show(&source, { 0, 0 });
+  return dynamic_cast<PopupMenuFrame*>(root.children().back());
+}
+
+static PopupList* popupList(PopupMenuFrame* popup, int index) {
+  if (index >= popup->children().size())
+    return nullptr;
+  return dynamic_cast<PopupList*>(popup->children()[index]);
+}
+
+static PopupMenu subMenu(int num_options) {
+  PopupMenu sub_menu("Sub Menu", 100);
+  for (int i = 0; i < num_options; ++i)
+    sub_menu.addOption(101 + i, "Sub Option");
+  return sub_menu;
+}
+
+TEST_CASE("PopupMenu takes the palette of the frame it's shown from", "[ui]") {
+  Palette palette;
+  PopupMenu menu;
+  menu.addSubMenu(subMenu(2));
+
+  Frame root, source;
+  source.setPalette(&palette);
+  PopupMenuFrame* popup = showMenu(menu, root, source);
+  REQUIRE(popup);
+  REQUIRE(root.palette() == nullptr);
+  REQUIRE(popup->palette() == &palette);
+
+  auto* list = popupList(popup, 0);
+  REQUIRE(list);
+  REQUIRE(list->palette() == &palette);
+  list->setHoverFromPosition(Point(10, list->yForIndex(0) + 5));
+  list->selectHoveredIndex();
+  auto* sub_list = popupList(popup, 1);
+  REQUIRE(sub_list);
+  REQUIRE(sub_list->palette() == &palette);
+}
+
+TEST_CASE("PopupList lays out options and separators with its palette's heights", "[ui]") {
+  Palette palette;
+  palette.setValue(PopupMenu::PopupOptionHeight, 30.0f);
+  palette.setValue(PopupMenu::PopupSeparatorHeight, 10.0f);
+  palette.setValue(PopupMenu::PopupSelectionPadding, 6.0f);
+
+  PopupMenu menu;
+  menu.addOption(1, "One");
+  menu.addBreak();
+  menu.addOption(2, "Two");
+
+  PopupList list;
+  list.setPalette(&palette);
+  list.setOptions(menu.options());
+
+  REQUIRE(list.renderHeight() == 82.0f);
+  REQUIRE(list.yForIndex(0) == 6);
+  REQUIRE(list.yForIndex(1) == 36);
+  REQUIRE(list.yForIndex(2) == 46);
+
+  list.setHoverFromPosition(Point(10, 35));
+  REQUIRE(list.hoverIndex() == 0);
+  list.setHoverFromPosition(Point(10, 40));
+  REQUIRE(list.hoverIndex() == -1);
+  list.setHoverFromPosition(Point(10, 46));
+  REQUIRE(list.hoverIndex() == 2);
+  list.setHoverFromPosition(Point(10, 76));
+  REQUIRE(list.hoverIndex() == -1);
+}
+
+static bool usesTypeFace(const PopupList* list, const Font& type_face) {
+  const Font& font = list->font();
+  return font.packedFont() == type_face.withDpiScale(font.dpiScale()).withSize(font.size()).packedFont();
+}
+
+TEST_CASE("PopupMenu lists use the menu's font at the palette's font size", "[ui]") {
+  Font lato(10, fonts::Lato_Regular_ttf);
+  Font mono(24, fonts::DroidSansMono_ttf);
+  PopupMenu menu;
+  PopupMenu sub_menu = subMenu(2);
+  Font menu_font = lato;
+  Font sub_menu_font = lato;
+
+  SECTION("Default font") { }
+
+  SECTION("Menu font") {
+    menu.withFont(mono);
+    menu_font = mono;
+    sub_menu_font = mono;
+  }
+
+  SECTION("Sub menu font") {
+    sub_menu.withFont(mono);
+    sub_menu_font = mono;
+  }
+
+  menu.addSubMenu(sub_menu);
+  Frame root, source;
+  PopupMenuFrame* popup = showMenu(menu, root, source);
+  REQUIRE(popup);
+  auto* list = popupList(popup, 0);
+  REQUIRE(list);
+  REQUIRE(list->font().size() == 14.0f);
+  REQUIRE(usesTypeFace(list, menu_font));
+
+  list->setHoverFromPosition(Point(10, list->yForIndex(0) + 5));
+  list->selectHoveredIndex();
+  auto* sub_list = popupList(popup, 1);
+  REQUIRE(sub_list);
+  REQUIRE(sub_list->font().size() == 14.0f);
+  REQUIRE(usesTypeFace(sub_list, sub_menu_font));
+}
+
+TEST_CASE("PopupMenu sub menus without a font use the font of the menu they open from", "[ui]") {
+  Font lato(10, fonts::Lato_Regular_ttf);
+  Font mono(10, fonts::DroidSansMono_ttf);
+  PopupMenu mono_sub_menu = subMenu(2);
+  mono_sub_menu.withFont(mono);
+  mono_sub_menu.addSubMenu(subMenu(2));
+
+  PopupMenu menu;
+  menu.addSubMenu(mono_sub_menu);
+  menu.addSubMenu(subMenu(2));
+
+  Frame root, source;
+  PopupMenuFrame* popup = showMenu(menu, root, source);
+  REQUIRE(popup);
+  auto* list = popupList(popup, 0);
+  REQUIRE(list);
+  list->setHoverFromPosition(Point(10, list->yForIndex(0) + 5));
+  list->selectHoveredIndex();
+  auto* sub_list = popupList(popup, 1);
+  REQUIRE(sub_list);
+  REQUIRE(usesTypeFace(sub_list, mono));
+
+  sub_list->setHoverFromPosition(Point(10, sub_list->yForIndex(2) + 5));
+  sub_list->selectHoveredIndex();
+  auto* sub_sub_list = popupList(popup, 2);
+  REQUIRE(sub_sub_list);
+  REQUIRE(usesTypeFace(sub_sub_list, mono));
+
+  list->setHoverFromPosition(Point(10, list->yForIndex(1) + 5));
+  list->selectHoveredIndex();
+  REQUIRE(usesTypeFace(sub_list, lato));
+}
+
+TEST_CASE("PopupMenu sub menu opens next to its scrolled option", "[ui]") {
+  PopupMenu menu;
+  for (int i = 0; i < 30; ++i) {
+    if (i == 15)
+      menu.addSubMenu(subMenu(3));
+    else
+      menu.addOption(i, "Option");
+  }
+
+  Frame root, source;
+  PopupMenuFrame* popup = showMenu(menu, root, source);
+  REQUIRE(popup);
+  auto* list = dynamic_cast<PopupList*>(popup->children()[0]);
+
+  list->setYPosition(200);
+  list->setHoverFromPosition(Point(10, list->yForIndex(15) + 5));
+  REQUIRE(list->hoverIndex() == 15);
+  list->selectHoveredIndex();
+  auto* sub_list = popupList(popup, 1);
+  REQUIRE(sub_list);
+
+  REQUIRE(sub_list->isVisible());
+  REQUIRE(sub_list->y() == list->y() + list->yForIndex(15) - 200);
+}
+
+TEST_CASE("PopupMenu long sub menu fits in the window", "[ui]") {
+  PopupMenu menu;
+  menu.addSubMenu(subMenu(30));
+
+  Frame root, source;
+  PopupMenuFrame* popup = showMenu(menu, root, source);
+  REQUIRE(popup);
+  auto* list = dynamic_cast<PopupList*>(popup->children()[0]);
+
+  list->setHoverFromPosition(Point(10, list->yForIndex(0) + 5));
+  list->selectHoveredIndex();
+  auto* sub_list = popupList(popup, 1);
+  REQUIRE(sub_list);
+
+  REQUIRE(sub_list->isVisible());
+  REQUIRE(sub_list->y() == 0);
+  REQUIRE(sub_list->height() == 300);
+}
+
+TEST_CASE("PopupMenu hover uses the scroll position of the hovered list", "[ui]") {
+  PopupMenu menu;
+  menu.addSubMenu(subMenu(30));
+
+  Frame root, source;
+  PopupMenuFrame* popup = showMenu(menu, root, source);
+  REQUIRE(popup);
+  auto* list = dynamic_cast<PopupList*>(popup->children()[0]);
+
+  list->setHoverFromPosition(Point(10, list->yForIndex(0) + 5));
+  list->selectHoveredIndex();
+  auto* sub_list = popupList(popup, 1);
+  REQUIRE(sub_list);
+  sub_list->setYPosition(100);
+
+  Point position(sub_list->x() + 10, sub_list->y() + sub_list->yForIndex(6) + 5 - 100);
+  popup->moveHover(position - list->topLeft(), list);
+  REQUIRE(sub_list->hoverIndex() == 6);
+}
+
+TEST_CASE("PopupMenu calls onCancel once when dismissed by losing focus", "[ui]") {
+  int cancels = 0;
+  int selections = 0;
+  PopupMenu menu;
+  menu.addOption(1, "Option 1");
+  menu.addOption(2, "Option 2");
+  menu.onCancel() += [&cancels] { cancels++; };
+  menu.onSelection() += [&selections](int) { selections++; };
+
+  SECTION("Focus lost") {
+    Frame root, source;
+    PopupMenuFrame* popup = showMenu(menu, root, source);
+    REQUIRE(popup);
+
+    popup->focusChanged(false, true);
+    REQUIRE(cancels == 1);
+    popup->focusChanged(true, false);
+    popup->focusChanged(false, false);
+    REQUIRE(cancels == 1);
+    REQUIRE(selections == 0);
+  }
+
+  SECTION("Focus lost after a selection") {
+    Frame root, source;
+    PopupMenuFrame* popup = showMenu(menu, root, source);
+    REQUIRE(popup);
+    auto* list = dynamic_cast<PopupList*>(popup->children()[0]);
+
+    popup->optionSelected(list->option(1), list);
+    popup->focusChanged(false, true);
+    REQUIRE(selections == 1);
+    REQUIRE(cancels == 0);
+  }
+}
+
+TEST_CASE("PopupMenu sub menu starts at the top when switching sub menus", "[ui]") {
+  PopupMenu menu;
+  menu.addSubMenu(subMenu(30));
+  menu.addSubMenu(subMenu(40));
+
+  Frame root, source;
+  PopupMenuFrame* popup = showMenu(menu, root, source);
+  REQUIRE(popup);
+  auto* list = dynamic_cast<PopupList*>(popup->children()[0]);
+
+  list->setHoverFromPosition(Point(10, list->yForIndex(0) + 5));
+  list->selectHoveredIndex();
+  auto* sub_list = popupList(popup, 1);
+  REQUIRE(sub_list);
+  sub_list->setYPosition(100);
+  REQUIRE(sub_list->yPosition() == 100);
+
+  list->setHoverFromPosition(Point(10, list->yForIndex(1) + 5));
+  list->selectHoveredIndex();
+  REQUIRE(sub_list->numOptions() == 40);
+  REQUIRE(sub_list->yPosition() == 0);
+  REQUIRE(sub_list->scrollableHeight() == sub_list->renderHeight());
+
+  sub_list->setYPosition(100);
+  list->selectHoveredIndex();
+  REQUIRE(sub_list->yPosition() == 100);
+}
+
+TEST_CASE("PopupMenu opens sub menus more than four levels deep", "[ui]") {
+  PopupMenu deepest("Level 6");
+  deepest.addOption(1, "Leaf");
+  for (int level = 5; level >= 1; --level) {
+    PopupMenu parent("Level " + std::to_string(level));
+    parent.addSubMenu(deepest);
+    deepest = parent;
+  }
+  PopupMenu menu;
+  menu.addSubMenu(deepest);
+
+  Frame root, source;
+  PopupMenuFrame* popup = showMenu(menu, root, source);
+  REQUIRE(popup);
+  for (int depth = 0; depth < 6; ++depth) {
+    PopupList* list = popupList(popup, depth);
+    REQUIRE(list);
+    list->setHoverFromPosition(Point(10, list->yForIndex(0) + 5));
+    list->selectHoveredIndex();
+  }
+
+  PopupList* leaf_list = popupList(popup, 6);
+  REQUIRE(leaf_list);
+  REQUIRE(leaf_list->isVisible());
+  REQUIRE(leaf_list->numOptions() == 1);
+  REQUIRE(leaf_list->option(0).name() == "Leaf");
+}
+
+namespace {
+  class PressEventHandler : public FrameEventHandler {
+  public:
+    PressEventHandler() {
+      take_mouse_drag = [this](Frame* frame) {
+        taker = frame;
+        return true;
+      };
+    }
+
+    Frame* taker = nullptr;
+  };
+
+  PopupMenuFrame* shownMenu(Frame& parent) {
+    for (Frame* child : parent.children()) {
+      if (auto menu = dynamic_cast<PopupMenuFrame*>(child))
+        return menu;
+    }
+    return nullptr;
+  }
+
+  MouseEvent mouseAt(Point position) {
+    MouseEvent event;
+    event.position = position;
+    event.window_position = position;
+    return event;
+  }
+}
+
+TEST_CASE("PopupMenu shown by a press follows its drag", "[ui]") {
+  PressEventHandler handler;
+  Frame parent;
+  parent.setBounds(0, 0, 400, 400);
+  parent.setEventHandler(&handler);
+  Frame source;
+  parent.addChild(&source);
+  source.setBounds(10, 10, 50, 20);
+
+  PopupMenu menu;
+  menu.addOption(1, "One");
+  menu.addOption(2, "Two");
+  int selected = -1;
+  bool cancelled = false;
+  menu.onSelection().add([&](int id) { selected = id; });
+  menu.onCancel().add([&] { cancelled = true; });
+  menu.show(&source);
+
+  PopupMenuFrame* frame = shownMenu(parent);
+  REQUIRE(frame != nullptr);
+  REQUIRE(handler.taker == frame);
+
+  auto list = dynamic_cast<PopupList*>(frame->children().front());
+  REQUIRE(list != nullptr);
+  REQUIRE(list->isVisible());
+  int option_height = list->yForIndex(1) - list->yForIndex(0);
+  Point second_option = list->topLeft() + Point(20.0f, list->yForIndex(1) + option_height / 2);
+
+  SECTION("A quick release leaves the menu open") {
+    frame->mouseDrag(mouseAt(second_option));
+    frame->mouseUp(mouseAt(second_option));
+    REQUIRE(selected == -1);
+    REQUIRE_FALSE(cancelled);
+  }
+
+  SECTION("Releasing without dragging onto the menu leaves it open") {
+    frame->timerCallback();
+    frame->mouseUp(mouseAt(source.topLeft()));
+    REQUIRE(selected == -1);
+    REQUIRE_FALSE(cancelled);
+  }
+
+  SECTION("Releasing on an option after the pause selects it") {
+    frame->mouseDrag(mouseAt(second_option));
+    frame->timerCallback();
+    frame->mouseUp(mouseAt(second_option));
+    REQUIRE(selected == 2);
+    REQUIRE_FALSE(cancelled);
+  }
+
+  SECTION("Releasing away from the menu after dragging onto it and the pause cancels it") {
+    frame->mouseDrag(mouseAt(second_option));
+    frame->mouseDrag(mouseAt({ 300, 300 }));
+    frame->timerCallback();
+    frame->mouseUp(mouseAt({ 300, 300 }));
+    REQUIRE(selected == -1);
+    REQUIRE(cancelled);
   }
 }

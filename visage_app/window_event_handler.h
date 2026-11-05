@@ -25,6 +25,9 @@
 #include "visage_ui/events.h"
 #include "visage_windowing/windowing.h"
 
+#include <map>
+#include <memory>
+#include <regex>
 #include <unordered_map>
 
 namespace visage {
@@ -39,8 +42,10 @@ namespace visage {
     ~WindowEventHandler() override;
 
     Frame* contentFrame() const { return content_frame_; }
-    void setKeyboardFocus(Frame* frame);
+    void setKeyboardFocus(Frame* frame) { changeKeyboardFocus(frame, false); }
+    Frame* keyboardFocusedFrame() const { return keyboard_focused_frame_; }
     void giveUpFocus(Frame* frame);
+    bool takeMouseDrag(Frame* frame);
 
     Point lastMousePosition() const { return last_mouse_position_; }
     IPoint convertToNative(const Point& point) const { return window_->convertToNative(point); }
@@ -89,7 +94,14 @@ namespace visage {
     void cleanupDragDropSource() override;
 
   private:
-    Frame* dragDropFrame(Point point, const std::vector<std::string>& files) const;
+    void changeKeyboardFocus(Frame* frame, bool was_clicked);
+    Frame* primaryDownFrame() const {
+      auto it = pointer_down_frames_.find(0);
+      return it != pointer_down_frames_.end() ? it->second : nullptr;
+    }
+    Frame* dragDropFrame(Point point, const std::vector<std::string>& files);
+    const std::regex* dragDropRegex(const std::string& pattern);
+    bool setHoveredFrame(Frame* frame, MouseEvent mouse_event);
 
     ApplicationEditor* editor_ = nullptr;
     Window* window_ = nullptr;
@@ -98,6 +110,8 @@ namespace visage {
     Frame* temporary_frame_ = nullptr;
     Frame* keyboard_focused_frame_ = nullptr;
     Frame* drag_drop_target_frame_ = nullptr;
+    Frame* drag_drop_source_frame_ = nullptr;
+    std::map<std::string, std::unique_ptr<std::regex>> drag_drop_regexes_;
 
     std::unordered_map<int, Frame*> pointer_down_frames_;
     std::unordered_map<int, Point> pointer_positions_;

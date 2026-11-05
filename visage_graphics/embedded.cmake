@@ -1,101 +1,117 @@
+include(ExternalProject)
+
+set(VISAGE_SHADER_COMPILER_DIR ${CMAKE_CURRENT_LIST_DIR}/shader_compiler)
+
+if (VISAGE_SHADER_COMPILER)
+  set(VISAGE_SHADER_COMPILER_EXECUTABLE ${VISAGE_SHADER_COMPILER} CACHE INTERNAL "")
+  set(VISAGE_SHADER_COMPILER_TARGET "" CACHE INTERNAL "")
+elseif (NOT CMAKE_CROSSCOMPILING)
+  if (NOT TARGET shader_compiler)
+    add_subdirectory(${VISAGE_SHADER_COMPILER_DIR} ${CMAKE_BINARY_DIR}/shader_compiler)
+  endif ()
+  set(VISAGE_SHADER_COMPILER_EXECUTABLE "$<TARGET_FILE:shader_compiler>" CACHE INTERNAL "")
+  set(VISAGE_SHADER_COMPILER_TARGET shader_compiler CACHE INTERNAL "")
+elseif (NOT TARGET VisageShaderCompilerHost)
+  set(VISAGE_SHADER_COMPILER_BINARY_DIR ${CMAKE_BINARY_DIR}/shader_compiler_host)
+  if (CMAKE_HOST_SYSTEM_NAME STREQUAL "Windows")
+    set(VISAGE_SHADER_COMPILER_EXECUTABLE ${VISAGE_SHADER_COMPILER_BINARY_DIR}/bin/shader_compiler.exe CACHE INTERNAL "")
+  else ()
+    set(VISAGE_SHADER_COMPILER_EXECUTABLE ${VISAGE_SHADER_COMPILER_BINARY_DIR}/bin/shader_compiler CACHE INTERNAL "")
+  endif ()
+
+  set(VISAGE_SHADER_COMPILER_ARGS -DCMAKE_BUILD_TYPE=Release)
+  list(APPEND VISAGE_SHADER_COMPILER_ARGS -DCMAKE_TOOLCHAIN_FILE=)
+  if (CMAKE_CXX_COMPILER_LAUNCHER)
+    list(APPEND VISAGE_SHADER_COMPILER_ARGS -DCMAKE_CXX_COMPILER_LAUNCHER=${CMAKE_CXX_COMPILER_LAUNCHER}
+         -DCMAKE_C_COMPILER_LAUNCHER=${CMAKE_CXX_COMPILER_LAUNCHER})
+  endif ()
+
+  ExternalProject_Add(VisageShaderCompilerHost
+    SOURCE_DIR ${VISAGE_SHADER_COMPILER_DIR}
+    BINARY_DIR ${VISAGE_SHADER_COMPILER_BINARY_DIR}
+    CMAKE_COMMAND ${CMAKE_COMMAND} -E env --unset=CC --unset=CXX ${CMAKE_COMMAND}
+    CMAKE_ARGS ${VISAGE_SHADER_COMPILER_ARGS}
+    BUILD_COMMAND ${CMAKE_COMMAND} --build <BINARY_DIR> --config Release --target shader_compiler
+    INSTALL_COMMAND ""
+    BUILD_BYPRODUCTS ${VISAGE_SHADER_COMPILER_EXECUTABLE}
+    BUILD_ALWAYS TRUE
+  )
+  set_target_properties(VisageShaderCompilerHost PROPERTIES FOLDER "visage/tools")
+  set(VISAGE_SHADER_COMPILER_TARGET VisageShaderCompilerHost CACHE INTERNAL "")
+endif ()
+
+set(VISAGE_METAL_SHADER_TARGET msl CACHE INTERNAL "")
+set(VISAGE_METAL_SHADER_ARGS "" CACHE INTERNAL "")
+# A metallib built here is for macOS. iOS embeds source and compiles at runtime.
+if (APPLE AND NOT VISAGE_LIVE_SHADERS AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
+  set(METAL_VERSION_MIN 10.15)
+  if (CMAKE_OSX_DEPLOYMENT_TARGET)
+    set(METAL_VERSION_MIN ${CMAKE_OSX_DEPLOYMENT_TARGET})
+  endif ()
+
+  set(METAL_CHECK_DIR ${CMAKE_BINARY_DIR}/visage_metal_check)
+  file(WRITE ${METAL_CHECK_DIR}/check.metal "kernel void main0() {}\n")
+  execute_process(
+    COMMAND xcrun -sdk macosx metal -mmacosx-version-min=${METAL_VERSION_MIN} -o ${METAL_CHECK_DIR}/check.metallib
+            ${METAL_CHECK_DIR}/check.metal
+    RESULT_VARIABLE METAL_CHECK_RESULT
+    OUTPUT_QUIET
+    ERROR_QUIET
+  )
+
+  if (METAL_CHECK_RESULT EQUAL 0)
+    set(VISAGE_METAL_SHADER_TARGET metallib CACHE INTERNAL "")
+    set(VISAGE_METAL_SHADER_ARGS --macos-version-min ${METAL_VERSION_MIN} CACHE INTERNAL "")
+  else ()
+    message(WARNING "VISAGE: The Metal Toolchain is missing, so Metal shaders are embedded as source and "
+            "compile at runtime, which stalls the first frame that uses each one. Install it with "
+            "'xcodebuild -downloadComponent MetalToolchain' and reconfigure.")
+  endif ()
+endif ()
 
 function(visage_embed_shaders project include_filename namespace original_shaders)
   file(GLOB_RECURSE SHADER_INCLUDES shaders/*.sh shaders/varying.def.sc)
-
-  set(SHADER_FOLDER ${CMAKE_CURRENT_BINARY_DIR}/shaders)
-  set(DX_FOLDER ${CMAKE_CURRENT_BINARY_DIR}/shaders/dx)
-  set(METAL_FOLDER ${CMAKE_CURRENT_BINARY_DIR}/shaders/metal)
-  set(GLSL_FOLDER ${CMAKE_CURRENT_BINARY_DIR}/shaders/glsl)
-  set(SPIRV_FOLDER ${CMAKE_CURRENT_BINARY_DIR}/shaders/spirv)
-  set(ESSL_FOLDER ${CMAKE_CURRENT_BINARY_DIR}/shaders/essl)
-
-  if (CMAKE_HOST_SYSTEM_NAME STREQUAL "Windows")
-    set(SHADERC "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/bin/win32/shaderc.exe")
-  elseif (CMAKE_HOST_SYSTEM_NAME STREQUAL "Darwin")
-    set(SHADERC "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/bin/macos/shaderc")
-  elseif (CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux")
-    set(SHADERC "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/bin/linux/shaderc")
-  endif()
-
-  file(MAKE_DIRECTORY ${SHADER_FOLDER})
-  file(MAKE_DIRECTORY ${DX_FOLDER})
-  file(MAKE_DIRECTORY ${METAL_FOLDER})
-  file(MAKE_DIRECTORY ${GLSL_FOLDER})
-  file(MAKE_DIRECTORY ${SPIRV_FOLDER})
-  file(MAKE_DIRECTORY ${ESSL_FOLDER})
+  file(GLOB LIBRARY_SHADER_INCLUDES ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/shaders/*.sh)
+  set(SHADER_DEPENDENCIES ${SHADER_INCLUDES} ${LIBRARY_SHADER_INCLUDES} ${VISAGE_SHADER_COMPILER_EXECUTABLE}
+      ${VISAGE_SHADER_COMPILER_TARGET})
+  list(REMOVE_DUPLICATES SHADER_DEPENDENCIES)
 
   if (EMSCRIPTEN)
-    set(OPENGLES TRUE)
-    set(SHADER_PLATFORM "asm.js")
+    set(SHADER_TARGET essl)
   elseif (WIN32)
-    set(SHADER_PLATFORM "windows")
-    set(DIRECTX TRUE)
+    set(SHADER_TARGET dxbc)
   elseif (APPLE)
-    set(SHADER_PLATFORM "osx")
-    set(METAL TRUE)
-  elseif (UNIX)
-    set(LINUX TRUE)
-    set(VULKAN TRUE)
-    set(SHADER_PLATFORM "linux")
-  endif()
+    set(SHADER_TARGET ${VISAGE_METAL_SHADER_TARGET})
+    set(SHADER_TARGET_ARGS ${VISAGE_METAL_SHADER_ARGS})
+  else ()
+    set(SHADER_TARGET spirv)
+  endif ()
+
+  set(SHADER_FOLDER ${CMAKE_CURRENT_BINARY_DIR}/shaders/${SHADER_TARGET})
+  file(MAKE_DIRECTORY ${SHADER_FOLDER})
 
   foreach(SHADER ${original_shaders})
     get_filename_component(SHADER_NAME ${SHADER} NAME_WE)
 
-    set(SHADER_TYPE "v")
-    if (${SHADER_NAME} MATCHES fs_*)
-      set(SHADER_TYPE "f")
+    set(SHADER_TYPE "f")
+    if (SHADER_NAME MATCHES "^v")
+      set(SHADER_TYPE "v")
+    elseif (SHADER_NAME MATCHES "^cs_")
+      set(SHADER_TYPE "c")
     endif()
 
-    if (OPENGLES)
-      set(ESSL_PATH ${ESSL_FOLDER}/${SHADER_NAME})
-      list(APPEND SHADER_BINS ${ESSL_PATH})
-      add_custom_command(
-        OUTPUT ${ESSL_PATH}
-        COMMAND ${SHADERC} -i ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/shaders -O3 -f ${SHADER} -o ${ESSL_PATH} --type ${SHADER_TYPE} --platform ${SHADER_PLATFORM} -p 100_es
-        DEPENDS ${SHADER}
-      )
-    endif()
+    if (SHADER_TYPE STREQUAL "c" AND EMSCRIPTEN)
+      continue()
+    endif ()
 
-    if (DIRECTX)
-      set(DX_PATH ${DX_FOLDER}/${SHADER_NAME})
-      list(APPEND SHADER_BINS ${DX_PATH})
-      add_custom_command(
-        OUTPUT ${DX_PATH}
-        COMMAND ${SHADERC} -i ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/shaders -O3 -f ${SHADER} -o ${DX_PATH} --type ${SHADER_TYPE} --platform ${SHADER_PLATFORM} -p s_4_0
-        DEPENDS ${SHADER}
-      )
-    endif()
-
-    if (METAL)
-      set(METAL_PATH ${METAL_FOLDER}/${SHADER_NAME})
-      list(APPEND SHADER_BINS ${METAL_PATH})
-      add_custom_command(
-        OUTPUT ${METAL_PATH}
-        COMMAND ${SHADERC} -i ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/shaders -f ${SHADER} -o ${METAL_PATH} --type ${SHADER_TYPE} --platform ${SHADER_PLATFORM} -p metal
-        DEPENDS ${SHADER}
-      )
-    endif()
-
-    if (OPENGL)
-      set(GLSL_PATH ${GLSL_FOLDER}/${SHADER_NAME})
-      list(APPEND SHADER_BINS ${GLSL_PATH})
-      add_custom_command(
-        OUTPUT ${GLSL_PATH}
-        COMMAND ${SHADERC} -i ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/shaders -f ${SHADER} -o ${GLSL_PATH} --type ${SHADER_TYPE} --platform ${SHADER_PLATFORM} -p 120
-        DEPENDS ${SHADER}
-      )
-    endif()
-
-    if (VULKAN)
-      set(SPIRV_PATH ${SPIRV_FOLDER}/${SHADER_NAME})
-      list(APPEND SHADER_BINS ${SPIRV_PATH})
-      add_custom_command(
-        OUTPUT ${SPIRV_PATH}
-        COMMAND ${SHADERC} -i ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/shaders -f ${SHADER} -o ${SPIRV_PATH} --type ${SHADER_TYPE} --platform ${SHADER_PLATFORM} -p spirv
-        DEPENDS ${SHADER}
-      )
-    endif()
+    set(SHADER_PATH ${SHADER_FOLDER}/${SHADER_NAME})
+    list(APPEND SHADER_BINS ${SHADER_PATH})
+    add_custom_command(
+      OUTPUT ${SHADER_PATH}
+      COMMAND ${VISAGE_SHADER_COMPILER_EXECUTABLE} -i ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/shaders -f ${SHADER}
+              -o ${SHADER_PATH} --type ${SHADER_TYPE} --target ${SHADER_TARGET} ${SHADER_TARGET_ARGS}
+      DEPENDS ${SHADER} ${SHADER_DEPENDENCIES}
+    )
   endforeach()
 
   set(SHADER_RESOURCES
@@ -109,7 +125,7 @@ function(visage_embed_shaders project include_filename namespace original_shader
   source_group("Shaders" FILES ${original_shaders})
 endfunction()
 
-file(GLOB LIBRARY_SHADERS shaders/[vf]s_*.sc)
+file(GLOB LIBRARY_SHADERS shaders/[vfc]s_*.sc)
 file(GLOB FONT_TTF_FILES fonts/*.ttf)
 file(GLOB ICON_FILES icons/*.svg)
 

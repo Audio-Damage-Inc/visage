@@ -282,9 +282,6 @@ namespace visage {
 }
 
 - (void)drawInMTKView:(MTKView*)view {
-  if (!view.currentDrawable || !view.currentRenderPassDescriptor)
-    return;
-
   view.layer.contentsScale = self.visage_window->dpiScale();
   long long ms = visage::time::microseconds();
   self.visage_window->drawCallback((ms - self.start_microseconds) / 1000000.0);

@@ -25,7 +25,9 @@
 #include "visage_utils/file_system.h"
 #include "visage_utils/time_utils.h"
 
+#include <algorithm>
 #include <map>
+#include <QuartzCore/QuartzCore.h>
 
 namespace visage {
 
@@ -111,7 +113,50 @@ namespace visage {
     [pasteboard setString:ns_text forType:NSPasteboardTypeString];
   }
 
+  static MouseCursor current_cursor_style = MouseCursor::Arrow;
+
+  static NSCursor* privateCursor(NSString* name) {
+    SEL selector = NSSelectorFromString(name);
+    if ([NSCursor respondsToSelector:selector]) {
+      NSCursor* (*get_cursor)(id, SEL) = (NSCursor * (*)(id, SEL))[NSCursor methodForSelector:selector];
+      NSCursor* cursor = get_cursor([NSCursor class], selector);
+      if (cursor)
+        return cursor;
+    }
+    return [NSCursor arrowCursor];
+  }
+
+  static NSCursor* systemCursorFile(NSString* name) {
+    NSString* path = [@"/System/Library/Frameworks/ApplicationServices.framework/Versions/A/Frameworks/"
+                      @"HIServices.framework/Versions/A/Resources/cursors" stringByAppendingPathComponent:name];
+    NSImage* image = [[NSImage alloc] initWithContentsOfFile:[path stringByAppendingPathComponent:@"cursor.pdf"]];
+    NSDictionary* info = [NSDictionary
+        dictionaryWithContentsOfFile:[path stringByAppendingPathComponent:@"info.plist"]];
+    if (image == nil || info == nil)
+      return [NSCursor arrowCursor];
+
+    NSPoint hot_spot = NSMakePoint([info[@"hotx"] doubleValue], [info[@"hoty"] doubleValue]);
+    return [[NSCursor alloc] initWithImage:image hotSpot:hot_spot];
+  }
+
+  static NSCursor* diagonalResizeCursor(bool top, bool left) {
+#if defined(__MAC_15_0) && __MAC_OS_X_VERSION_MAX_ALLOWED >= __MAC_15_0
+    if (@available(macOS 15.0, *)) {
+      NSCursorFrameResizePosition position;
+      if (top)
+        position = left ? NSCursorFrameResizePositionTopLeft : NSCursorFrameResizePositionTopRight;
+      else
+        position = left ? NSCursorFrameResizePositionBottomLeft : NSCursorFrameResizePositionBottomRight;
+      return [NSCursor frameResizeCursorFromPosition:position
+                                        inDirections:NSCursorFrameResizeDirectionsAll];
+    }
+#endif
+    return privateCursor(top == left ? @"_windowResizeNorthWestSouthEastCursor" :
+                                       @"_windowResizeNorthEastSouthWestCursor");
+  }
+
   void setCursorStyle(MouseCursor style) {
+    current_cursor_style = style;
     if (style == MouseCursor::Invisible) {
       setCursorVisible(false);
       return;
@@ -122,9 +167,15 @@ namespace visage {
     static const NSCursor* ibeam_cursor = [NSCursor IBeamCursor];
     static const NSCursor* crosshair_cursor = [NSCursor crosshairCursor];
     static const NSCursor* pointing_cursor = [NSCursor pointingHandCursor];
-    static const NSCursor* dragging_cursor = [NSCursor openHandCursor];
+    static const NSCursor* drag_cursor = [NSCursor openHandCursor];
+    static const NSCursor* dragging_cursor = [NSCursor closedHandCursor];
     static const NSCursor* horizontal_resize_cursor = [NSCursor resizeLeftRightCursor];
     static const NSCursor* vertical_resize_cursor = [NSCursor resizeUpDownCursor];
+    static const NSCursor* multi_directional_resize_cursor = systemCursorFile(@"move");
+    static const NSCursor* top_left_resize_cursor = diagonalResizeCursor(true, true);
+    static const NSCursor* top_right_resize_cursor = diagonalResizeCursor(true, false);
+    static const NSCursor* bottom_left_resize_cursor = diagonalResizeCursor(false, true);
+    static const NSCursor* bottom_right_resize_cursor = diagonalResizeCursor(false, false);
 
     const NSCursor* cursor = nil;
     switch (style) {
@@ -132,23 +183,30 @@ namespace visage {
     case MouseCursor::IBeam: cursor = ibeam_cursor; break;
     case MouseCursor::Crosshair: cursor = crosshair_cursor; break;
     case MouseCursor::Pointing: cursor = pointing_cursor; break;
-    case MouseCursor::MultiDirectionalResize:
+    case MouseCursor::Drag: cursor = drag_cursor; break;
     case MouseCursor::Dragging: cursor = dragging_cursor; break;
+    case MouseCursor::MultiDirectionalResize: cursor = multi_directional_resize_cursor; break;
     case MouseCursor::HorizontalResize: cursor = horizontal_resize_cursor; break;
     case MouseCursor::VerticalResize: cursor = vertical_resize_cursor; break;
+    case MouseCursor::TopLeftResize: cursor = top_left_resize_cursor; break;
+    case MouseCursor::TopRightResize: cursor = top_right_resize_cursor; break;
+    case MouseCursor::BottomLeftResize: cursor = bottom_left_resize_cursor; break;
+    case MouseCursor::BottomRightResize: cursor = bottom_right_resize_cursor; break;
     default: return;
     }
     [cursor set];
   }
 
-  Point cursorPosition() {
-    CGEventRef event = CGEventCreate(nullptr);
-    CGPoint cursor = CGEventGetLocation(event);
-    CFRelease(event);
-    return { static_cast<float>(cursor.x), static_cast<float>(cursor.y) };
+  static void restoreCursorStyle() {
+    setCursorStyle(current_cursor_style);
   }
 
   void setCursorVisible(bool visible) {
+    static bool hidden = false;
+    if (hidden == !visible)
+      return;
+
+    hidden = !visible;
     if (visible)
       [NSCursor unhide];
     else
@@ -162,24 +220,42 @@ namespace visage {
     CGAssociateMouseAndMouseCursorPosition(true);
   }
 
+  static WindowMac* activeWindow() {
+    NSWindow* key_window = [NSApp keyWindow];
+    NativeWindowLookup& lookup = NativeWindowLookup::instance();
+    WindowMac* window = lookup.findWindow((__bridge void*)[key_window firstResponder]);
+    return window ? window : lookup.findWindow((__bridge void*)[key_window contentView]);
+  }
+
+  static Point viewScreenPosition(WindowMac* window) {
+    NSView* view = (__bridge NSView*)window->nativeHandle();
+    NSRect view_rect = [view convertRect:view.bounds toView:nil];
+    NSRect screen_rect = [view.window convertRectToScreen:view_rect];
+
+    float screen_height = [[[NSScreen screens] objectAtIndex:0] frame].size.height;
+    return { static_cast<float>(screen_rect.origin.x),
+             static_cast<float>(screen_height - NSMaxY(screen_rect)) };
+  }
+
+  Point cursorPosition() {
+    CGEventRef event = CGEventCreate(nullptr);
+    CGPoint cursor = CGEventGetLocation(event);
+    CFRelease(event);
+    Point position = { static_cast<float>(cursor.x), static_cast<float>(cursor.y) };
+
+    WindowMac* window = activeWindow();
+    if (window == nullptr || [[NSScreen screens] count] == 0)
+      return position;
+
+    return position - viewScreenPosition(window);
+  }
+
   void setCursorPosition(Point window_position) {
-    NSWindow* window = [NSApp mainWindow];
-    if (!window)
+    WindowMac* window = activeWindow();
+    if (window == nullptr || [[NSScreen screens] count] == 0)
       return;
 
-    NSScreen* screen = [window screen];
-    if (!screen)
-      return;
-
-    NSRect content_rect = [[window contentView] frame];
-    NSRect screen_rect = [window convertRectToScreen:content_rect];
-
-    float screen_height = [screen frame].size.height;
-
-    float x = screen_rect.origin.x + window_position.x;
-    float y = screen_height - NSMaxY(screen_rect) + window_position.y;
-
-    setCursorScreenPosition({ x, y });
+    setCursorScreenPosition(viewScreenPosition(window) + window_position);
   }
 
   static Point windowBorderSize(NSWindow* window_handle) {
@@ -194,6 +270,20 @@ namespace visage {
 
   bool isMobileDevice() {
     return false;
+  }
+
+  static void stopEventLoop() {
+    [NSApp stop:nil];
+    NSEvent* wake_event = [NSEvent otherEventWithType:NSEventTypeApplicationDefined
+                                             location:NSZeroPoint
+                                        modifierFlags:0
+                                            timestamp:0
+                                         windowNumber:0
+                                              context:nil
+                                              subtype:0
+                                                data1:0
+                                                data2:0];
+    [NSApp postEvent:wake_event atStart:YES];
   }
 
   KeyCode translateKeyCode(int mac_key_code) {
@@ -245,7 +335,7 @@ namespace visage {
     case kVK_ANSI_M: return KeyCode::M;
     case kVK_ANSI_Period: return KeyCode::Period;
     case kVK_ANSI_Grave: return KeyCode::Grave;
-    case kVK_ANSI_KeypadDecimal: return KeyCode::KPDecimal;
+    case kVK_ANSI_KeypadDecimal: return KeyCode::KPPeriod;
     case kVK_ANSI_KeypadMultiply: return KeyCode::KPMultiply;
     case kVK_ANSI_KeypadPlus: return KeyCode::KPPlus;
     case kVK_ANSI_KeypadClear: return KeyCode::KPClear;
@@ -313,14 +403,124 @@ namespace visage {
     default: return KeyCode::Unknown;
     }
   }
+
+  struct ModifierKeyFlags {
+    NSUInteger device_flag = 0;
+    NSUInteger flag = 0;
+  };
+
+  static constexpr NSUInteger kDeviceModifierFlags = NX_DEVICELSHIFTKEYMASK | NX_DEVICERSHIFTKEYMASK |
+                                                     NX_DEVICELCTLKEYMASK | NX_DEVICERCTLKEYMASK |
+                                                     NX_DEVICELALTKEYMASK | NX_DEVICERALTKEYMASK |
+                                                     NX_DEVICELCMDKEYMASK | NX_DEVICERCMDKEYMASK;
+
+  static ModifierKeyFlags modifierKeyFlags(int mac_key_code) {
+    switch (mac_key_code) {
+    case kVK_Shift: return { NX_DEVICELSHIFTKEYMASK, NSEventModifierFlagShift };
+    case kVK_RightShift: return { NX_DEVICERSHIFTKEYMASK, NSEventModifierFlagShift };
+    case kVK_Control: return { NX_DEVICELCTLKEYMASK, NSEventModifierFlagControl };
+    case kVK_RightControl: return { NX_DEVICERCTLKEYMASK, NSEventModifierFlagControl };
+    case kVK_Option: return { NX_DEVICELALTKEYMASK, NSEventModifierFlagOption };
+    case kVK_RightOption: return { NX_DEVICERALTKEYMASK, NSEventModifierFlagOption };
+    case kVK_Command: return { NX_DEVICELCMDKEYMASK, NSEventModifierFlagCommand };
+    case kVK_RightCommand: return { NX_DEVICERCMDKEYMASK, NSEventModifierFlagCommand };
+    default: return {};
+    }
+  }
 }
 
+static NSPasteboardType const kVisageDragFileType = @"audio.vital.visage.drag-file";
+
+@interface VisageFilePromiseProvider : NSFilePromiseProvider
+@end
+
+@implementation VisageFilePromiseProvider
+- (NSArray<NSPasteboardType>*)writableTypesForPasteboard:(NSPasteboard*)pasteboard {
+  return [[super writableTypesForPasteboard:pasteboard] arrayByAddingObject:kVisageDragFileType];
+}
+
+- (id)pasteboardPropertyListForType:(NSPasteboardType)type {
+  if ([type isEqualToString:kVisageDragFileType])
+    return [self.userInfo path];
+  return [super pasteboardPropertyListForType:type];
+}
+@end
+
 @implementation VisageDraggingSource
+- (instancetype)init {
+  self = [super init];
+  self.write_queue = [[NSOperationQueue alloc] init];
+  return self;
+}
+
+- (void)startWithFile:(NSURL*)file_url {
+  self.file_url = file_url;
+  self.cleanup_pending = true;
+  self.session_ended = false;
+  self.dropped = false;
+  self.file_written = false;
+  self.delivered_in_app = false;
+}
+
+- (void)cleanupIfPending {
+  if (!self.cleanup_pending)
+    return;
+
+  self.cleanup_pending = false;
+  if (self.view.visage_window)
+    self.view.visage_window->cleanupDragDropSource();
+}
+
+- (void)cleanupIfDone {
+  if (self.session_ended && (!self.dropped || self.file_written || self.delivered_in_app))
+    [self cleanupIfPending];
+}
+
+- (NSString*)filePromiseProvider:(NSFilePromiseProvider*)provider fileNameForType:(NSString*)file_type {
+  return [provider.userInfo lastPathComponent];
+}
+
+- (void)filePromiseProvider:(NSFilePromiseProvider*)provider
+          writePromiseToURL:(NSURL*)url
+          completionHandler:(void (^)(NSError* error))completion_handler {
+  NSURL* source = provider.userInfo;
+  NSError* error = nil;
+  [[NSFileManager defaultManager] copyItemAtURL:source toURL:url error:&error];
+  completion_handler(error);
+
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if (self.file_url != source)
+      return;
+
+    self.file_written = true;
+    [self cleanupIfDone];
+  });
+}
+
+- (NSOperationQueue*)operationQueueForFilePromiseProvider:(NSFilePromiseProvider*)provider {
+  return self.write_queue;
+}
+
 - (NSDragOperation)draggingSession:(NSDraggingSession*)session
     sourceOperationMaskForDraggingContext:(NSDraggingContext)context {
   return NSDragOperationCopy;
 }
+
+- (void)draggingSession:(NSDraggingSession*)session
+           endedAtPoint:(NSPoint)screen_point
+              operation:(NSDragOperation)operation {
+  self.session_ended = true;
+  self.dropped = operation != NSDragOperationNone;
+  [self cleanupIfDone];
+  [self.view dragEndedAtScreenPoint:screen_point];
+}
 @end
+
+static constexpr int kMaxSkippedFrames = 2;
+static constexpr double kInitialRenderTime = 0.004;
+static constexpr int kRenderTimeSamples = 16;
+static constexpr double kDrawDeadlineMargin = 0.0015;
+static constexpr double kMaxDrawLead = 0.6;
 
 @implementation VisageAppViewDelegate
 - (instancetype)initWithWindow:(visage::WindowMac*)window {
@@ -330,9 +530,10 @@ namespace visage {
   return self;
 }
 
-- (void)drawWindow {
+- (void)drawWindow:(CFTimeInterval)target_time {
   long long ms = visage::time::microseconds();
-  self.visage_window->drawCallback((ms - self.start_microseconds) / 1000000.0);
+  double lead = target_time > 0.0 ? target_time - CACurrentMediaTime() : 0.0;
+  self.visage_window->drawCallback((ms - self.start_microseconds) / 1000000.0 + lead);
 }
 
 - (void)mtkView:(MTKView*)view drawableSizeWillChange:(CGSize)size {
@@ -340,27 +541,80 @@ namespace visage {
 }
 
 - (void)drawInMTKView:(MTKView*)view {
-  if (!view.currentDrawable || !view.currentRenderPassDescriptor)
+  if (view.drawableSize.width <= 0 || view.drawableSize.height <= 0)
     return;
 
+  if (!self.visage_window->frameQueueReady() && self.skipped_frames < kMaxSkippedFrames) {
+    self.skipped_frames++;
+    return;
+  }
+  self.skipped_frames = 0;
+
   view.layer.contentsScale = self.visage_window->dpiScale();
-  [self drawWindow];
+  CFTimeInterval target_time = 0.0;
+  if ([view isKindOfClass:[VisageAppView class]])
+    target_time = ((VisageAppView*)view).frame_target_time;
+  [self drawWindow:target_time];
 }
 @end
 
-@implementation VisageAppView
+@interface VisageAppView ()
+@property(strong) id display_link;
+@property(strong) dispatch_source_t draw_timer;
+#if defined(__MAC_14_0) && __MAC_OS_X_VERSION_MAX_ALLOWED >= __MAC_14_0
+- (void)displayLinkFired:(CADisplayLink*)link API_AVAILABLE(macos(14.0));
+#endif
+- (void)drawFrame;
+- (void)updateRenderTime:(CFTimeInterval)seconds;
+@end
+
+#if defined(__MAC_14_0) && __MAC_OS_X_VERSION_MAX_ALLOWED >= __MAC_14_0
+@interface VisageDisplayLinkTarget : NSObject
+@property(weak) VisageAppView* view;
+@end
+
+@implementation VisageDisplayLinkTarget
+- (void)displayLinkFired:(CADisplayLink*)link API_AVAILABLE(macos(14.0)) {
+  VisageAppView* view = self.view;
+  if (view)
+    [view displayLinkFired:link];
+  else
+    [link invalidate];
+}
+@end
+#endif
+
+@implementation VisageAppView {
+  CFTimeInterval render_times_[kRenderTimeSamples];
+  int render_time_index_;
+}
+
 - (instancetype)initWithFrame:(NSRect)frame_rect inWindow:(visage::WindowMac*)window {
   self = [super initWithFrame:frame_rect];
   self.visage_window = window;
   self.device = MTLCreateSystemDefaultDevice();
-  self.clearColor = MTLClearColorMake(0.1, 0.1, 0.1, 1.0);
   self.enableSetNeedsDisplay = NO;
-  self.framebufferOnly = YES;
   self.layerContentsPlacement = NSViewLayerContentsPlacementTopLeft;
   self.preferredFramesPerSecond = 120;
+  for (CFTimeInterval& render_time : render_times_)
+    render_time = kInitialRenderTime;
+  self.render_time = kInitialRenderTime;
+#if defined(__MAC_14_0) && __MAC_OS_X_VERSION_MAX_ALLOWED >= __MAC_14_0
+  if (@available(macOS 14.0, *))
+    self.paused = YES;
+#endif
 
-  [self registerForDraggedTypes:@[NSPasteboardTypeFileURL]];
+  [self registerForDraggedTypes:@[NSPasteboardTypeFileURL, kVisageDragFileType]];
   self.drag_source = [[VisageDraggingSource alloc] init];
+  self.drag_source.view = self;
+
+  NSTrackingAreaOptions tracking_options = NSTrackingMouseEnteredAndExited | NSTrackingMouseMoved |
+                                           NSTrackingCursorUpdate | NSTrackingActiveAlways |
+                                           NSTrackingInVisibleRect;
+  [self addTrackingArea:[[NSTrackingArea alloc] initWithRect:NSZeroRect
+                                                     options:tracking_options
+                                                       owner:self
+                                                    userInfo:nil]];
 
   return self;
 }
@@ -369,32 +623,202 @@ namespace visage {
   return YES;
 }
 
+- (void)setFocused:(bool)focused {
+  if (self.has_focus == focused)
+    return;
+
+  self.has_focus = focused;
+  if (self.visage_window == nullptr)
+    return;
+
+  if (focused)
+    self.visage_window->handleFocusGained();
+  else
+    self.visage_window->handleFocusLost();
+}
+
+- (void)updateFocus {
+  [self setFocused:self.window.isKeyWindow && self.window.firstResponder == self];
+}
+
+- (BOOL)becomeFirstResponder {
+  BOOL accepted = [super becomeFirstResponder];
+  if (accepted)
+    [self setFocused:self.window.isKeyWindow];
+  return accepted;
+}
+
+- (BOOL)resignFirstResponder {
+  BOOL accepted = [super resignFirstResponder];
+  if (accepted)
+    [self setFocused:false];
+  return accepted;
+}
+
+- (void)windowKeyChanged:(NSNotification*)notification {
+  [self updateFocus];
+}
+
+- (BOOL)acceptsFirstMouse:(NSEvent*)event {
+  return YES;
+}
+
+- (void)cursorUpdate:(NSEvent*)event {
+  visage::restoreCursorStyle();
+}
+
 - (void)keyDown:(NSEvent*)event {
+  if (self.visage_window == nullptr)
+    return;
+
   bool command = [event modifierFlags] & NSEventModifierFlagCommand;
-  bool q_or_w = [[event charactersIgnoringModifiers] isEqualToString:@"q"] ||
-                [[event charactersIgnoringModifiers] isEqualToString:@"w"];
-  if (self.allow_quit && command && q_or_w) {
+  if (self.allow_quit && command && [[event charactersIgnoringModifiers] isEqualToString:@"q"]) {
     visage::NativeWindowLookup::instance().closeAll();
+    return;
+  }
+  if (self.allow_quit && command && [[event charactersIgnoringModifiers] isEqualToString:@"w"]) {
+    self.visage_window->close();
     return;
   }
 
   int modifiers = [self keyboardModifiers:event];
+  bool composing = [self hasMarkedText];
+  self.command_requested = false;
+  self.pending_text = [NSMutableString string];
   if ((modifiers & visage::kModifierCmd) == 0)
     [self interpretKeyEvents:[NSArray arrayWithObject:event]];
+  else
+    self.typed_length = 0;
+  NSString* text = self.pending_text;
+  self.pending_text = nil;
+  bool ime_used = (composing && !self.command_requested) || [self hasMarkedText];
+  if (composing && text.length && self.visage_window) {
+    self.visage_window->handleTextInput([text UTF8String]);
+    text = nil;
+  }
 
-  visage::KeyCode key_code = visage::translateKeyCode([event keyCode]);
-  if (!self.visage_window->handleKeyDown(key_code, modifiers, [event isARepeat]))
+  bool used = false;
+  if (!ime_used && self.visage_window) {
+    visage::KeyCode key_code = visage::translateKeyCode([event keyCode]);
+    used = self.visage_window->handleKeyDown(key_code, modifiers, [event isARepeat]);
+  }
+  if (text.length && self.visage_window)
+    self.visage_window->handleTextInput([text UTF8String]);
+  if (!ime_used && !used && self.visage_window)
     [super keyDown:event];
 }
 
+- (void)flagsChanged:(NSEvent*)event {
+  if (self.visage_window == nullptr)
+    return;
+
+  visage::ModifierKeyFlags key_flags = visage::modifierKeyFlags([event keyCode]);
+  if (key_flags.flag == 0) {
+    [super flagsChanged:event];
+    return;
+  }
+
+  NSUInteger flags = [event modifierFlags];
+  bool down = flags & key_flags.flag;
+  if (flags & visage::kDeviceModifierFlags)
+    down = flags & key_flags.device_flag;
+
+  visage::KeyCode key_code = visage::translateKeyCode([event keyCode]);
+  int modifiers = [self keyboardModifiers:event];
+  bool used = false;
+  if (down)
+    used = self.visage_window->handleKeyDown(key_code, modifiers, false);
+  else
+    used = self.visage_window->handleKeyUp(key_code, modifiers);
+
+  if (!used)
+    [super flagsChanged:event];
+}
+
 - (void)keyUp:(NSEvent*)event {
+  if (self.visage_window == nullptr)
+    return;
+
   visage::KeyCode key_code = visage::translateKeyCode([event keyCode]);
   if (!self.visage_window->handleKeyUp(key_code, [self keyboardModifiers:event]))
     [super keyUp:event];
 }
 
 - (void)insertText:(id)string {
-  self.visage_window->handleTextInput([string UTF8String]);
+  [self insertText:string replacementRange:NSMakeRange(NSNotFound, 0)];
+}
+
+- (void)insertText:(id)string replacementRange:(NSRange)replacement_range {
+  self.marked_text = nil;
+  if (replacement_range.location != NSNotFound && replacement_range.location < self.typed_length) {
+    NSUInteger replaced = self.typed_length - replacement_range.location;
+    for (NSUInteger i = 0; i < replaced && self.visage_window; ++i) {
+      self.visage_window->handleKeyDown(visage::KeyCode::Backspace, 0, false);
+      if (self.visage_window)
+        self.visage_window->handleKeyUp(visage::KeyCode::Backspace, 0);
+    }
+    self.typed_length = replacement_range.location;
+  }
+
+  NSString* text = [string isKindOfClass:[NSAttributedString class]] ? [string string] : string;
+  self.typed_length += text.length;
+  if (self.pending_text) {
+    [self.pending_text appendString:text];
+    return;
+  }
+  if (self.visage_window == nullptr)
+    return;
+
+  const char* utf8 = [text UTF8String];
+  if (utf8)
+    self.visage_window->handleTextInput(utf8);
+}
+
+- (void)setMarkedText:(id)string
+        selectedRange:(NSRange)selected_range
+     replacementRange:(NSRange)replacement_range {
+  NSString* text = [string isKindOfClass:[NSAttributedString class]] ? [string string] : string;
+  self.marked_text = text.length ? text : nil;
+}
+
+- (void)unmarkText {
+  self.marked_text = nil;
+}
+
+- (BOOL)hasMarkedText {
+  return self.marked_text != nil;
+}
+
+- (NSRange)markedRange {
+  if (self.marked_text == nil)
+    return NSMakeRange(NSNotFound, 0);
+  return NSMakeRange(self.typed_length, self.marked_text.length);
+}
+
+- (NSRange)selectedRange {
+  return NSMakeRange(self.typed_length, 0);
+}
+
+- (NSArray<NSAttributedStringKey>*)validAttributesForMarkedText {
+  return @[];
+}
+
+- (NSAttributedString*)attributedSubstringForProposedRange:(NSRange)range
+                                               actualRange:(NSRangePointer)actual_range {
+  return nil;
+}
+
+- (NSUInteger)characterIndexForPoint:(NSPoint)point {
+  return NSNotFound;
+}
+
+- (NSRect)firstRectForCharacterRange:(NSRange)range actualRange:(NSRangePointer)actual_range {
+  return NSMakeRect(self.text_input_screen_position.x, self.text_input_screen_position.y, 0, 0);
+}
+
+- (void)doCommandBySelector:(SEL)selector {
+  self.command_requested = true;
+  self.typed_length = 0;
 }
 
 - (void)moveLeft:(id)sender {
@@ -463,7 +887,7 @@ namespace visage {
 }
 
 - (int)keyboardModifiers:(NSEvent*)event {
-  NSUInteger flags = [event modifierFlags];
+  NSUInteger flags = event ? [event modifierFlags] : [NSEvent modifierFlags];
   int result = 0;
   if (flags & NSEventModifierFlagCommand)
     result = result | visage::kModifierCmd;
@@ -490,6 +914,9 @@ namespace visage {
 }
 
 - (void)scrollWheel:(NSEvent*)event {
+  if (self.visage_window == nullptr)
+    return;
+
   static constexpr float kPreciseScrollingScale = 0.008f;
   visage::Point point = [self eventPosition:event];
   float delta_x = [event deltaX];
@@ -507,37 +934,64 @@ namespace visage {
 }
 
 - (void)mouseMoved:(NSEvent*)event {
+  if (self.visage_window == nullptr)
+    return;
+
   visage::Point point = [self eventPosition:event];
   self.visage_window->handleMouseMove(point.x, point.y, [self mouseButtonState],
                                       [self keyboardModifiers:event]);
 }
 
 - (void)mouseEntered:(NSEvent*)event {
+  if (self.visage_window == nullptr)
+    return;
+
   visage::Point point = [self eventPosition:event];
   self.visage_window->handleMouseMove(point.x, point.y, [self mouseButtonState],
                                       [self keyboardModifiers:event]);
 }
 
 - (void)mouseExited:(NSEvent*)event {
+  if (self.visage_window == nullptr)
+    return;
+
   self.visage_window->handleMouseLeave([self mouseButtonState], [self keyboardModifiers:event]);
 }
 
 - (void)mouseDown:(NSEvent*)event {
+  if (self.visage_window == nullptr)
+    return;
+
+  __attribute__((objc_precise_lifetime)) VisageAppView* keep_alive = self;
   visage::Point point = [self eventPosition:event];
   self.mouse_down_screen_position = [self mouseScreenPosition];
+  self.text_input_screen_position = [NSEvent mouseLocation];
+  self.typed_length = 0;
   self.visage_window->handleMouseDown(visage::kMouseButtonLeft, point.x, point.y,
                                       [self mouseButtonState], [self keyboardModifiers:event]);
+  if (self.visage_window == nullptr)
+    return;
+
   [self makeKeyWindow];
   if (self.visage_window->isDragDropSource()) {
+    [self.drag_source cleanupIfPending];
+    if (self.visage_window == nullptr)
+      return;
+
     visage::File file = self.visage_window->startDragDropSource();
     NSString* path = [NSString stringWithUTF8String:file.string().c_str()];
     NSURL* url = [NSURL fileURLWithPath:path];
+    [self.drag_source startWithFile:url];
+
+    NSString* file_type = nil;
+    [url getResourceValue:&file_type forKey:NSURLTypeIdentifierKey error:nil];
+    VisageFilePromiseProvider* provider =
+        [[VisageFilePromiseProvider alloc] initWithFileType:file_type ? file_type : @"public.data"
+                                                   delegate:self.drag_source];
+    provider.userInfo = url;
 
     NSImage* image = [[NSWorkspace sharedWorkspace] iconForFile:path];
-    NSPasteboardItem* pasteboard_item = [[NSPasteboardItem alloc] init];
-    [pasteboard_item setString:url.absoluteString forType:NSPasteboardTypeFileURL];
-
-    NSDraggingItem* dragging_item = [[NSDraggingItem alloc] initWithPasteboardWriter:pasteboard_item];
+    NSDraggingItem* dragging_item = [[NSDraggingItem alloc] initWithPasteboardWriter:provider];
     NSPoint drag_position = [self convertPoint:event.locationInWindow fromView:nil];
     drag_position.x -= image.size.width / 2;
     drag_position.y -= image.size.height / 2;
@@ -552,12 +1006,31 @@ namespace visage {
 }
 
 - (void)mouseUp:(NSEvent*)event {
+  if (self.visage_window == nullptr)
+    return;
+
   visage::Point point = [self eventPosition:event];
   self.visage_window->handleMouseUp(visage::kMouseButtonLeft, point.x, point.y,
                                     [self mouseButtonState], [self keyboardModifiers:event]);
 }
 
+- (void)dragEndedAtScreenPoint:(NSPoint)screen_point {
+  if (self.visage_window == nullptr)
+    return;
+
+  NSPoint view_location = [self convertPoint:[self.window convertPointFromScreen:screen_point]
+                                    fromView:nil];
+  CGFloat view_height = self.frame.size.height;
+  visage::Point point = visage::Point(view_location.x, view_height - view_location.y) *
+                        self.visage_window->dpiScale();
+  self.visage_window->handleMouseUp(visage::kMouseButtonLeft, point.x, point.y,
+                                    [self mouseButtonState], [self keyboardModifiers:nil]);
+}
+
 - (void)mouseDragged:(NSEvent*)event {
+  if (self.visage_window == nullptr)
+    return;
+
   visage::Point point = [self eventPosition:event];
   self.visage_window->handleMouseMove(point.x, point.y, [self mouseButtonState],
                                       [self keyboardModifiers:event]);
@@ -565,20 +1038,33 @@ namespace visage {
 }
 
 - (void)rightMouseDown:(NSEvent*)event {
+  if (self.visage_window == nullptr)
+    return;
+
+  __attribute__((objc_precise_lifetime)) VisageAppView* keep_alive = self;
   visage::Point point = [self eventPosition:event];
   self.mouse_down_screen_position = [self mouseScreenPosition];
   self.visage_window->handleMouseDown(visage::kMouseButtonRight, point.x, point.y,
                                       [self mouseButtonState], [self keyboardModifiers:event]);
+  if (self.visage_window == nullptr)
+    return;
+
   [self makeKeyWindow];
 }
 
 - (void)rightMouseUp:(NSEvent*)event {
+  if (self.visage_window == nullptr)
+    return;
+
   visage::Point point = [self eventPosition:event];
   self.visage_window->handleMouseUp(visage::kMouseButtonRight, point.x, point.y,
                                     [self mouseButtonState], [self keyboardModifiers:event]);
 }
 
 - (void)rightMouseDragged:(NSEvent*)event {
+  if (self.visage_window == nullptr)
+    return;
+
   visage::Point point = [self eventPosition:event];
   self.visage_window->handleMouseMove(point.x, point.y, [self mouseButtonState],
                                       [self keyboardModifiers:event]);
@@ -586,17 +1072,27 @@ namespace visage {
 }
 
 - (void)otherMouseDown:(NSEvent*)event {
+  if (self.visage_window == nullptr)
+    return;
+
   if ([event buttonNumber] != 2)
     return;
 
+  __attribute__((objc_precise_lifetime)) VisageAppView* keep_alive = self;
   visage::Point point = [self eventPosition:event];
   self.mouse_down_screen_position = [self mouseScreenPosition];
   self.visage_window->handleMouseDown(visage::kMouseButtonMiddle, point.x, point.y,
                                       [self mouseButtonState], [self keyboardModifiers:event]);
+  if (self.visage_window == nullptr)
+    return;
+
   [self makeKeyWindow];
 }
 
 - (void)otherMouseUp:(NSEvent*)event {
+  if (self.visage_window == nullptr)
+    return;
+
   if ([event buttonNumber] != 2)
     return;
 
@@ -606,6 +1102,9 @@ namespace visage {
 }
 
 - (void)otherMouseDragged:(NSEvent*)event {
+  if (self.visage_window == nullptr)
+    return;
+
   visage::Point point = [self eventPosition:event];
   self.visage_window->handleMouseMove(point.x, point.y, [self mouseButtonState],
                                       [self keyboardModifiers:event]);
@@ -625,6 +1124,14 @@ namespace visage {
 - (void)viewWillMoveToWindow:(NSWindow*)new_window {
   [super viewWillMoveToWindow:new_window];
 
+  if (self.window) {
+    NSNotificationCenter* center = [NSNotificationCenter defaultCenter];
+    [center removeObserver:self name:NSWindowDidChangeOcclusionStateNotification object:self.window];
+    [center removeObserver:self name:NSWindowDidBecomeKeyNotification object:self.window];
+    [center removeObserver:self name:NSWindowDidResignKeyNotification object:self.window];
+  }
+  [self setFocused:false];
+
   if (new_window) {
     [new_window setAcceptsMouseMovedEvents:YES];
     [new_window setIgnoresMouseEvents:NO];
@@ -636,9 +1143,79 @@ namespace visage {
                                              selector:@selector(windowOcclusionChanged:)
                                                  name:NSWindowDidChangeOcclusionStateNotification
                                                object:new_window];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(windowKeyChanged:)
+                                                 name:NSWindowDidBecomeKeyNotification
+                                               object:new_window];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(windowKeyChanged:)
+                                                 name:NSWindowDidResignKeyNotification
+                                               object:new_window];
   }
   else if (self.visage_window)
     self.visage_window->closeWindow();
+}
+
+- (void)viewDidMoveToWindow {
+  [super viewDidMoveToWindow];
+#if defined(__MAC_14_0) && __MAC_OS_X_VERSION_MAX_ALLOWED >= __MAC_14_0
+  if (@available(macOS 14.0, *)) {
+    if (self.window == nil) {
+      [self.display_link invalidate];
+      self.display_link = nil;
+    }
+    else if (self.display_link == nil) {
+      VisageDisplayLinkTarget* target = [[VisageDisplayLinkTarget alloc] init];
+      target.view = self;
+      CADisplayLink* link = [self displayLinkWithTarget:target
+                                               selector:@selector(displayLinkFired:)];
+      [link addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
+      self.display_link = link;
+    }
+  }
+#endif
+}
+
+#if defined(__MAC_14_0) && __MAC_OS_X_VERSION_MAX_ALLOWED >= __MAC_14_0
+- (void)displayLinkFired:(CADisplayLink*)link API_AVAILABLE(macos(14.0)) {
+  CFTimeInterval period = link.targetTimestamp - link.timestamp;
+  CFTimeInterval lead = std::min(self.render_time + kDrawDeadlineMargin, kMaxDrawLead * period);
+  CFTimeInterval delay = link.targetTimestamp - lead - CACurrentMediaTime();
+  self.frame_target_time = link.targetTimestamp;
+  if (delay <= 0.0) {
+    [self drawFrame];
+    return;
+  }
+
+  if (self.draw_timer == nil) {
+    VisageAppView* __weak weak_self = self;
+    self.draw_timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, DISPATCH_TIMER_STRICT,
+                                             dispatch_get_main_queue());
+    dispatch_source_set_event_handler(self.draw_timer, ^{
+      [weak_self drawFrame];
+    });
+    dispatch_resume(self.draw_timer);
+  }
+  dispatch_source_set_timer(self.draw_timer, dispatch_time(DISPATCH_TIME_NOW, delay * NSEC_PER_SEC),
+                            DISPATCH_TIME_FOREVER, 0);
+}
+#endif
+
+- (void)drawFrame {
+  [self draw];
+  self.frame_target_time = 0.0;
+}
+
+- (void)updateRenderTime:(CFTimeInterval)seconds {
+  render_times_[render_time_index_] = seconds;
+  render_time_index_ = (render_time_index_ + 1) % kRenderTimeSamples;
+  self.render_time = *std::max_element(render_times_, render_times_ + kRenderTimeSamples);
+}
+
+- (void)dealloc {
+  [_display_link invalidate];
+  if (_draw_timer)
+    dispatch_source_cancel(_draw_timer);
 }
 
 - (void)windowOcclusionChanged:(NSNotification*)notification {
@@ -649,6 +1226,10 @@ namespace visage {
 
 - (std::vector<std::string>)dropFileList:(id<NSDraggingInfo>)sender {
   NSPasteboard* pasteboard = [sender draggingPasteboard];
+  NSString* visage_file = [pasteboard stringForType:kVisageDragFileType];
+  if (visage_file)
+    return { [visage_file UTF8String] };
+
   NSArray* classes = @[[NSURL class]];
   NSDictionary* options = @{ NSPasteboardURLReadingFileURLsOnlyKey: @YES };
   NSArray* file_urls = [pasteboard readObjectsForClasses:classes options:options];
@@ -680,9 +1261,12 @@ namespace visage {
 - (BOOL)performDragOperation:(id<NSDraggingInfo>)sender {
   visage::Point drag_point = [self dragPosition:sender];
   std::vector<std::string> files = [self dropFileList:sender];
-  if (self.visage_window->handleFileDrop(drag_point.x, drag_point.y, files))
-    return NSDragOperationCopy;
-  return NSDragOperationNone;
+  if (!self.visage_window->handleFileDrop(drag_point.x, drag_point.y, files))
+    return NO;
+
+  if ([[sender draggingSource] isKindOfClass:[VisageDraggingSource class]])
+    ((VisageDraggingSource*)[sender draggingSource]).delivered_in_app = true;
+  return YES;
 }
 
 - (BOOL)prepareForDragOperation:(id<NSDraggingInfo>)sender {
@@ -697,9 +1281,9 @@ namespace visage {
 
 @implementation VisageAppWindowDelegate
 - (BOOL)windowShouldClose:(NSWindow*)sender {
-  NSView* view = [sender contentView];
-  visage::WindowMac* window = visage::NativeWindowLookup::instance().findWindow((__bridge void*)view);
-  return window->handleCloseRequested();
+  if (self.visage_window == nullptr)
+    return YES;
+  return self.visage_window->handleCloseRequested();
 }
 
 - (void)windowWillClose:(NSNotification*)notification {
@@ -733,12 +1317,30 @@ namespace visage {
 @end
 
 @implementation VisageAppDelegate
-- (void)applicationDidFinishLaunching:(NSNotification*)notification {
-  self.window_delegate = [[VisageAppWindowDelegate alloc] init];
-  self.window_delegate.visage_window = self.visage_window;
-  self.window_delegate.window_handle = self.window_handle;
-  [self.window_handle setDelegate:self.window_delegate];
+- (void)stopEventLoop {
+  visage::stopEventLoop();
+}
 
+- (void)handleQuitEvent:(NSAppleEventDescriptor*)event
+         withReplyEvent:(NSAppleEventDescriptor*)reply {
+  if (!visage::NativeWindowLookup::instance().requestAllToClose()) {
+    [reply setParamDescriptor:[NSAppleEventDescriptor descriptorWithInt32:userCanceledErr]
+                   forKeyword:keyErrorNumber];
+    return;
+  }
+
+  [self stopEventLoop];
+}
+
+- (void)applicationWillFinishLaunching:(NSNotification*)notification {
+  NSAppleEventManager* event_manager = [NSAppleEventManager sharedAppleEventManager];
+  [event_manager setEventHandler:self
+                     andSelector:@selector(handleQuitEvent:withReplyEvent:)
+                   forEventClass:kCoreEventClass
+                      andEventID:kAEQuitApplication];
+}
+
+- (void)applicationDidFinishLaunching:(NSNotification*)notification {
   [NSApp activateIgnoringOtherApps:YES];
 }
 
@@ -752,7 +1354,7 @@ namespace visage {
 
 - (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication*)sender {
   if (visage::NativeWindowLookup::instance().requestAllToClose())
-    return NSTerminateNow;
+    [self stopEventLoop];
   return NSTerminateCancel;
 }
 
@@ -772,6 +1374,10 @@ namespace visage {
       [app setDelegate:delegate];
       [app run];
     }
+  }
+
+  void* WindowMac::graphicsHandle() const {
+    return (__bridge void*)view_.layer;
   }
 
   void* WindowMac::initWindow() const {
@@ -796,21 +1402,35 @@ namespace visage {
     return screen.backingScaleFactor;
   }
 
+  static CGFloat squaredDistanceToScreen(NSScreen* screen, int x, int y, CGFloat primary_height) {
+    CGFloat screen_scale = screen.backingScaleFactor;
+    NSPoint point = NSMakePoint(x / screen_scale, primary_height - y / screen_scale);
+    NSRect frame = [screen frame];
+    CGFloat dx = std::max<CGFloat>({ NSMinX(frame) - point.x, 0.0, point.x - NSMaxX(frame) });
+    CGFloat dy = std::max<CGFloat>({ NSMinY(frame) - point.y, 0.0, point.y - NSMaxY(frame) });
+    return dx * dx + dy * dy;
+  }
+
   static IBounds computeWindowBoundsWithScale(const Dimension& x, const Dimension& y,
                                               const Dimension& w, const Dimension& h, float& scale) {
     scale = defaultDpiScale();
     NSScreen* screen = [NSScreen mainScreen];
+    CGFloat primary_height = [[NSScreen screens] firstObject].frame.size.height;
     CGRect screen_frame = [screen frame];
     scale = screen.backingScaleFactor;
     int screen_width = screen_frame.size.width * scale;
     int screen_height = screen_frame.size.height * scale;
-    int x_pos = x.computeInt(scale, screen_width, screen_height, 0);
-    int y_pos = y.computeInt(scale, screen_width, screen_height, 0);
+    int center_x = NSMidX(screen_frame) * scale;
+    int center_y = (primary_height - NSMidY(screen_frame)) * scale;
+    int x_pos = x.computeInt(scale, screen_width, screen_height, center_x);
+    int y_pos = y.computeInt(scale, screen_width, screen_height, center_y);
 
+    CGFloat closest = screen ? squaredDistanceToScreen(screen, x_pos, y_pos, primary_height) : 0.0;
     for (NSScreen* s in [NSScreen screens]) {
-      if (NSPointInRect(CGPointMake(x_pos, y_pos), [s frame])) {
+      CGFloat distance = squaredDistanceToScreen(s, x_pos, y_pos, primary_height);
+      if (screen == nil || distance < closest) {
         screen = s;
-        break;
+        closest = distance;
       }
     }
 
@@ -821,12 +1441,12 @@ namespace visage {
     int width = w.computeInt(scale, screen_width, screen_height, 0);
     int height = h.computeInt(scale, screen_width, screen_height, 0);
 
-    int default_x = (screen_width - width) / 2;
-    int default_y = (screen_height - height) / 2;
+    int default_x = NSMinX(screen_frame) * scale + (screen_width - width) / 2;
+    int default_y = (primary_height - NSMaxY(screen_frame)) * scale + (screen_height - height) / 2;
     x_pos = x.computeInt(scale, screen_width, screen_height, default_x);
     y_pos = y.computeInt(scale, screen_width, screen_height, default_y);
 
-    return { x_pos, screen_height - y_pos - height, width, height };
+    return { x_pos, y_pos, width, height };
   }
 
   IBounds computeWindowBounds(const Dimension& x, const Dimension& y, const Dimension& w,
@@ -839,8 +1459,9 @@ namespace visage {
                                        const Dimension& height, Window::Decoration decoration) {
     float scale = 1.0f;
     IBounds bounds = computeWindowBoundsWithScale(x, y, width, height, scale);
-    return std::make_unique<WindowMac>(bounds.x(), bounds.y(), bounds.width(), bounds.height(),
-                                       scale, decoration);
+    int primary_height = [[NSScreen screens] firstObject].frame.size.height * scale;
+    return std::make_unique<WindowMac>(bounds.x(), primary_height - bounds.bottom(), bounds.width(),
+                                       bounds.height(), scale, decoration);
   }
 
   void* headlessWindowHandle() {
@@ -872,7 +1493,6 @@ namespace visage {
     view_.allow_quit = true;
 
     createWindow();
-    NativeWindowLookup::instance().addWindow(this);
   }
 
   WindowMac::WindowMac(int width, int height, float scale, void* parent_handle) :
@@ -893,10 +1513,19 @@ namespace visage {
   WindowMac::~WindowMac() {
     NativeWindowLookup::instance().removeWindow(this);
     hide();
+    if (window_handle_.delegate == window_delegate_)
+      [window_handle_ setDelegate:nil];
     view_.visage_window = nullptr;
 
     if (parent_view_)
       [view_ removeFromSuperview];
+    else if (window_handle_) {
+      NSWindow* window = window_handle_;
+      [window close];
+      dispatch_async(dispatch_get_main_queue(), ^{
+        (void)window;
+      });
+    }
   }
 
   void WindowMac::createWindow() {
@@ -915,6 +1544,11 @@ namespace visage {
                                                    styleMask:style_mask
                                                      backing:NSBackingStoreBuffered
                                                        defer:NO];
+    window.releasedWhenClosed = NO;
+    window_delegate_ = [[VisageAppWindowDelegate alloc] init];
+    window_delegate_.visage_window = this;
+    window_delegate_.window_handle = window;
+    [window setDelegate:window_delegate_];
     if (decoration_ == Decoration::Popup)
       [window setLevel:NSStatusWindowLevel];
     else if (decoration_ == Decoration::Client)
@@ -928,16 +1562,23 @@ namespace visage {
 
     [window_handle_ setContentView:view_];
     [window_handle_ makeFirstResponder:view_];
+    NativeWindowLookup::instance().addWindow(this);
   }
 
   void WindowMac::closeWindow() {
-    last_content_rect_ = window_handle_.contentLayoutRect;
+    last_content_rect_ = [window_handle_ contentRectForFrameRect:window_handle_.frame];
     NativeWindowLookup::instance().removeWindow(this);
     hide();
+    if (window_handle_.delegate == window_delegate_)
+      [window_handle_ setDelegate:nil];
+    NSWindow* closed_window = window_handle_;
     window_handle_ = nullptr;
+    dispatch_async(dispatch_get_main_queue(), ^{
+      (void)closed_window;
+    });
 
     if (running_event_loop_ && !NativeWindowLookup::instance().anyWindowOpen())
-      [NSApp stop:nil];
+      stopEventLoop();
   }
 
   void WindowMac::setParentWindow(NSWindow* window) {
@@ -974,21 +1615,17 @@ namespace visage {
 
   void WindowMac::windowContentsResized(int width, int height) {
     NSRect frame = [window_handle_ frame];
-    int x = frame.origin.x;
-    int y = frame.origin.y;
-
     float w = width / dpiScale();
     float h = height / dpiScale();
     Point borders = windowBorderSize(window_handle_);
+    float frame_height = h + borders.y;
+    frame.origin.y += frame.size.height - frame_height;
     frame.size.width = w + borders.x;
-    frame.size.height = h + borders.y;
+    frame.size.height = frame_height;
 
     [view_ setFrameSize:CGSizeMake(w, h)];
-    if (parent_view_ == nullptr) {
-      [window_handle_ setFrame:NSMakeRect(x, y, frame.size.width, frame.size.height)
-                       display:YES
-                       animate:true];
-    }
+    if (parent_view_ == nullptr)
+      [window_handle_ setFrame:frame display:YES animate:true];
   }
 
   void WindowMac::show() {
@@ -1021,11 +1658,22 @@ namespace visage {
   }
 
   void WindowMac::close() {
-    [window_handle_ performClose:nil];
+    if (parent_view_)
+      return;
+
+    NSWindow* window = window_handle_;
+    if (window.styleMask & NSWindowStyleMaskClosable)
+      [window performClose:nil];
+    else if (window && handleCloseRequested())
+      [window close];
   }
 
   bool WindowMac::isShowing() const {
     return window_handle_ && [window_handle_ isVisible];
+  }
+
+  bool WindowMac::isClosed() const {
+    return parent_view_ == nullptr && window_handle_ == nullptr;
   }
 
   void WindowMac::setWindowTitle(const std::string& title) {
@@ -1052,6 +1700,10 @@ namespace visage {
 
   void WindowMac::handleNativeResize(int width, int height) {
     handleResized(width, height);
+  }
+
+  void WindowMac::setFrameRenderTime(double seconds) {
+    [view_ updateRenderTime:seconds];
   }
 }
 

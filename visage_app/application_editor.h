@@ -23,12 +23,17 @@
 
 #include "visage_ui/frame.h"
 
+#include <array>
+#include <unordered_set>
+
 namespace visage {
   class ApplicationEditor;
   class Canvas;
   class Window;
   class WindowEventHandler;
+  class WindowDecoration;
   class ClientWindowDecoration;
+  class WindowFrameDecoration;
 
   class TopLevelFrame : public Frame {
   public:
@@ -37,17 +42,21 @@ namespace visage {
 
     void resized() override;
     void addClientDecoration();
-    bool hasClientDecoration() const { return client_decoration_ != nullptr; }
+    void addWindowFrameDecoration(Window* window);
+    void removeWindowFrameDecoration();
+    HitTestResult decorationHitTest(const Point& position) const;
 
   private:
+    void addDecoration(WindowDecoration* decoration);
+    std::array<WindowDecoration*, 2> decorations() const;
+
     ApplicationEditor* editor_ = nullptr;
     std::unique_ptr<ClientWindowDecoration> client_decoration_;
+    std::unique_ptr<WindowFrameDecoration> frame_decoration_;
   };
 
   class ApplicationEditor : public Frame {
   public:
-    static constexpr int kDefaultClientTitleBarHeight = 30;
-
     ApplicationEditor();
     ~ApplicationEditor() override;
 
@@ -100,16 +109,14 @@ namespace visage {
 
     void addClientDecoration() { top_level_->addClientDecoration(); }
     HitTestResult hitTest(const Point& position) const override {
-      if (position.y < kDefaultClientTitleBarHeight && top_level_->hasClientDecoration())
-        return HitTestResult::TitleBar;
-
-      return HitTestResult::Client;
+      return top_level_->decorationHitTest(position);
     }
 
   private:
     Window* window_ = nullptr;
     FrameEventHandler event_handler_;
     std::unique_ptr<Canvas> canvas_;
+    int waited_frame_buffer_id_ = -1;
     std::unique_ptr<TopLevelFrame> top_level_;
 
     std::unique_ptr<WindowEventHandler> window_event_handler_;
@@ -124,6 +131,8 @@ namespace visage {
 
     std::vector<Frame*> stale_children_;
     std::vector<Frame*> drawing_children_;
+    std::unordered_set<Frame*> stale_set_;
+    std::unordered_set<Frame*> drawing_set_;
 
     VISAGE_LEAK_CHECKER(ApplicationEditor)
   };

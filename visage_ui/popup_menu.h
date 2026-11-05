@@ -25,8 +25,11 @@
 #include "frame.h"
 #include "scroll_bar.h"
 #include "visage_graphics/font.h"
+#include "visage_graphics/theme.h"
 
 #include <climits>
+#include <memory>
+#include <vector>
 
 namespace visage {
   class PopupMenu;
@@ -38,6 +41,26 @@ namespace visage {
 
   class PopupMenu {
   public:
+    VISAGE_THEME_DEFINE_COLOR(PopupMenuBackground);
+    VISAGE_THEME_DEFINE_COLOR(PopupMenuBorder);
+    VISAGE_THEME_DEFINE_COLOR(PopupMenuText);
+    VISAGE_THEME_DEFINE_COLOR(PopupMenuDisabledText);
+    VISAGE_THEME_DEFINE_COLOR(PopupMenuSelection);
+    VISAGE_THEME_DEFINE_COLOR(PopupMenuSelectionText);
+    VISAGE_THEME_DEFINE_COLOR(PopupMenuSeparator);
+
+    VISAGE_THEME_DEFINE_VALUE(PopupOptionHeight);
+    VISAGE_THEME_DEFINE_VALUE(PopupMinWidth);
+    VISAGE_THEME_DEFINE_VALUE(PopupTextPadding);
+    VISAGE_THEME_DEFINE_VALUE(PopupFontSize);
+    VISAGE_THEME_DEFINE_VALUE(PopupSelectionPadding);
+    VISAGE_THEME_DEFINE_VALUE(PopupRounding);
+    VISAGE_THEME_DEFINE_VALUE(PopupSelectionRounding);
+    VISAGE_THEME_DEFINE_VALUE(PopupBorderWidth);
+    VISAGE_THEME_DEFINE_VALUE(PopupSeparatorHeight);
+    VISAGE_THEME_DEFINE_VALUE(PopupSeparatorThickness);
+    VISAGE_THEME_DEFINE_VALUE(PopupSubMenuArrowSize);
+
     static constexpr int kNotSet = INT_MIN;
 
     PopupMenu() = default;
@@ -69,6 +92,13 @@ namespace visage {
       shortcut_character_ = character;
       return *this;
     }
+
+    PopupMenu& withFont(const Font& font) {
+      font_ = font;
+      return *this;
+    }
+
+    const Font& font() const { return font_; }
 
     const int nativeShortcutModifiers() const { return shortcut_modifiers_; }
     const std::string& nativeShortcutCharacter() const { return shortcut_character_; }
@@ -103,6 +133,7 @@ namespace visage {
 
     int shortcut_modifiers_ = 0;
     std::string shortcut_character_;
+    Font font_;
     std::vector<PopupMenu> options_;
   };
 
@@ -122,6 +153,7 @@ namespace visage {
 
     void setOptions(std::vector<PopupMenu> options) { options_ = std::move(options); }
     void setFont(const Font& font) { font_ = font.withDpiScale(dpiScale()); }
+    const Font& font() const { return font_; }
 
     float renderHeight() const;
     float renderWidth() const;
@@ -158,12 +190,15 @@ namespace visage {
     void addListener(Listener* listener) { listeners_.push_back(listener); }
     void resetOpenMenu() { menu_open_index_ = -1; }
     void setOpenMenu(int index) { menu_open_index_ = index; }
+    int openMenuIndex() const { return menu_open_index_; }
     void setOpacity(float opacity) {
       opacity_ = opacity;
       redraw();
     }
 
   private:
+    int optionHeight(int index) const;
+
     std::vector<Listener*> listeners_;
     std::vector<PopupMenu> options_;
     float opacity_ = 0.0f;
@@ -177,7 +212,6 @@ namespace visage {
                          public PopupList::Listener,
                          public EventTimer {
   public:
-    static constexpr int kMaxSubMenus = 4;
     static constexpr int kWaitForSelection = 20;
     static constexpr int kPauseMs = 400;
 
@@ -193,10 +227,12 @@ namespace visage {
     }
     void setListFonts(const Font& font) {
       for (auto& list : lists_)
-        list.setFont(font);
+        list->setFont(font);
     }
 
     void exit();
+    void mouseDrag(const MouseEvent& e) override;
+    void mouseUp(const MouseEvent& e) override;
     void hierarchyChanged() override;
     void focusChanged(bool is_focused, bool was_clicked) override;
     void visibilityChanged() override { opacity_animation_.target(isVisible(), true); }
@@ -211,11 +247,19 @@ namespace visage {
     float opacity() const { return opacity_animation_.value(); }
 
   private:
+    PopupList& popupList(int index);
+    int listIndex(const PopupList* list) const;
+    Frame* keyboardFocusedFrame() const;
+
     PopupMenu menu_;
-    Frame* parent_ = nullptr;
+    Frame* top_parent_ = nullptr;
+    Frame* previous_focus_ = nullptr;
+    std::weak_ptr<bool> previous_focus_alive_;
     bool done_ = false;
+    bool mouse_up_enabled_ = false;
+    bool dragged_onto_menu_ = false;
     Animation<float> opacity_animation_;
-    PopupList lists_[kMaxSubMenus];
+    std::vector<std::unique_ptr<PopupList>> lists_;
     int hover_index_ = -1;
     Font font_;
     PopupList* hover_list_ = nullptr;

@@ -22,11 +22,32 @@
 #include "visage/app.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <chrono>
+#include <thread>
 #include <visage/ui.h>
 
 using namespace visage;
 
+namespace {
+  class TestWindow : public Window {
+  public:
+    TestWindow(int width, int height) : Window(width, height) { }
+
+    void runEventLoop() override { }
+    void* nativeHandle() const override { return nullptr; }
+    void windowContentsResized(int width, int height) override { }
+    void show() override { }
+    void showMaximized() override { }
+    void hide() override { }
+    void close() override { }
+    bool isShowing() const override { return true; }
+    void setWindowTitle(const std::string& title) override { }
+    IPoint maxWindowDimensions() const override { return { 1000, 1000 }; }
+  };
+}
+
 TEST_CASE("Multi-pointer: two touches dispatch to different frames", "[multitouch]") {
+  TestWindow test_window(100, 100);
   ApplicationEditor editor;
 
   Frame left_frame;
@@ -67,7 +88,8 @@ TEST_CASE("Multi-pointer: two touches dispatch to different frames", "[multitouc
 
   editor.addChild(&left_frame);
   editor.addChild(&right_frame);
-  editor.setWindowless(100, 100);
+  editor.setBounds(0, 0, 100, 100);
+  editor.addToWindow(&test_window);
 
   Window* window = editor.window();
   REQUIRE(window != nullptr);
@@ -106,6 +128,7 @@ TEST_CASE("Multi-pointer: two touches dispatch to different frames", "[multitouc
 }
 
 TEST_CASE("Multi-pointer: drag is locked to the frame where touch began", "[multitouch]") {
+  TestWindow test_window(100, 100);
   ApplicationEditor editor;
 
   Frame frame_a;
@@ -122,7 +145,8 @@ TEST_CASE("Multi-pointer: drag is locked to the frame where touch began", "[mult
 
   editor.addChild(&frame_a);
   editor.addChild(&frame_b);
-  editor.setWindowless(100, 100);
+  editor.setBounds(0, 0, 100, 100);
+  editor.addToWindow(&test_window);
 
   Window* window = editor.window();
 
@@ -138,6 +162,7 @@ TEST_CASE("Multi-pointer: drag is locked to the frame where touch began", "[mult
 }
 
 TEST_CASE("Multi-pointer: single touch works identically to mouse", "[multitouch]") {
+  TestWindow test_window(100, 100);
   ApplicationEditor editor;
 
   Frame target;
@@ -156,7 +181,8 @@ TEST_CASE("Multi-pointer: single touch works identically to mouse", "[multitouch
   target.onMouseUp() += [&](const MouseEvent& e) { up_count++; };
 
   editor.addChild(&target);
-  editor.setWindowless(100, 100);
+  editor.setBounds(0, 0, 100, 100);
+  editor.addToWindow(&test_window);
 
   Window* window = editor.window();
 
@@ -173,6 +199,7 @@ TEST_CASE("Multi-pointer: single touch works identically to mouse", "[multitouch
 }
 
 TEST_CASE("Multi-pointer: focus only changes from primary pointer", "[multitouch]") {
+  TestWindow test_window(100, 100);
   ApplicationEditor editor;
 
   Frame frame_a;
@@ -186,18 +213,19 @@ TEST_CASE("Multi-pointer: focus only changes from primary pointer", "[multitouch
   int a_focus_gained = 0;
   int b_focus_gained = 0;
 
-  frame_a.onFocusChanged() += [&](bool gained, bool) {
+  frame_a.onFocusChange() += [&](bool gained, bool) {
     if (gained)
       a_focus_gained++;
   };
-  frame_b.onFocusChanged() += [&](bool gained, bool) {
+  frame_b.onFocusChange() += [&](bool gained, bool) {
     if (gained)
       b_focus_gained++;
   };
 
   editor.addChild(&frame_a);
   editor.addChild(&frame_b);
-  editor.setWindowless(100, 100);
+  editor.setBounds(0, 0, 100, 100);
+  editor.addToWindow(&test_window);
 
   Window* window = editor.window();
 
@@ -216,6 +244,7 @@ TEST_CASE("Multi-pointer: focus only changes from primary pointer", "[multitouch
 }
 
 TEST_CASE("Multi-pointer: focus lost sends mouseUp to all pointers", "[multitouch]") {
+  TestWindow test_window(100, 100);
   ApplicationEditor editor;
 
   Frame frame_a;
@@ -232,7 +261,8 @@ TEST_CASE("Multi-pointer: focus lost sends mouseUp to all pointers", "[multitouc
 
   editor.addChild(&frame_a);
   editor.addChild(&frame_b);
-  editor.setWindowless(100, 100);
+  editor.setBounds(0, 0, 100, 100);
+  editor.addToWindow(&test_window);
 
   Window* window = editor.window();
 
@@ -247,6 +277,7 @@ TEST_CASE("Multi-pointer: focus lost sends mouseUp to all pointers", "[multitouc
 }
 
 TEST_CASE("Multi-pointer: three simultaneous touches", "[multitouch]") {
+  TestWindow test_window(100, 100);
   ApplicationEditor editor;
 
   Frame frame_a;
@@ -270,7 +301,8 @@ TEST_CASE("Multi-pointer: three simultaneous touches", "[multitouch]") {
   editor.addChild(&frame_a);
   editor.addChild(&frame_b);
   editor.addChild(&frame_c);
-  editor.setWindowless(100, 100);
+  editor.setBounds(0, 0, 100, 100);
+  editor.addToWindow(&test_window);
 
   Window* window = editor.window();
 
@@ -293,6 +325,7 @@ TEST_CASE("Multi-pointer: three simultaneous touches", "[multitouch]") {
 }
 
 TEST_CASE("Multi-pointer: move resets repeat click count for non-primary pointer", "[multitouch]") {
+  TestWindow test_window(100, 100);
   ApplicationEditor editor;
 
   Frame target;
@@ -305,13 +338,16 @@ TEST_CASE("Multi-pointer: move resets repeat click count for non-primary pointer
   };
 
   editor.addChild(&target);
-  editor.setWindowless(100, 100);
+  editor.setBounds(0, 0, 100, 100);
+  editor.addToWindow(&test_window);
 
   Window* window = editor.window();
 
   // Two quick taps at the same position with pointer 1 → double click
   window->handleMouseDown(kMouseButtonLeft, 50, 50, kMouseButtonLeft, 0, 1);
   window->handleMouseUp(kMouseButtonLeft, 50, 50, 0, 0, 1);
+  // A repeat has to land at least a millisecond after the click before it.
+  std::this_thread::sleep_for(std::chrono::milliseconds(2));
   window->handleMouseDown(kMouseButtonLeft, 50, 50, kMouseButtonLeft, 0, 1);
   REQUIRE(last_repeat_count == 2);
   window->handleMouseUp(kMouseButtonLeft, 50, 50, 0, 0, 1);
@@ -326,6 +362,7 @@ TEST_CASE("Multi-pointer: move resets repeat click count for non-primary pointer
 }
 
 TEST_CASE("Multi-pointer: focus lost uses per-pointer positions for mouseUp", "[multitouch]") {
+  TestWindow test_window(100, 100);
   ApplicationEditor editor;
 
   Frame frame_a;
@@ -341,7 +378,8 @@ TEST_CASE("Multi-pointer: focus lost uses per-pointer positions for mouseUp", "[
 
   editor.addChild(&frame_a);
   editor.addChild(&frame_b);
-  editor.setWindowless(100, 100);
+  editor.setBounds(0, 0, 100, 100);
+  editor.addToWindow(&test_window);
 
   Window* window = editor.window();
 
@@ -351,10 +389,11 @@ TEST_CASE("Multi-pointer: focus lost uses per-pointer positions for mouseUp", "[
 
   // Move each pointer to distinct positions
   window->handleMouseMove(30, 50, kMouseButtonLeft, 0, 0);
-  window->handleMouseMove(80, 50, kMouseButtonLeft, 0, 1);
+  window->handleMouseMove(85, 50, kMouseButtonLeft, 0, 1);
 
   window->handleFocusLost();
 
   // Each frame should get mouseUp at its pointer's last position, not a shared one
-  REQUIRE(a_up_x != b_up_x);
+  REQUIRE(a_up_x == 30.0f);
+  REQUIRE(b_up_x == 35.0f);
 }

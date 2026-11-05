@@ -31,8 +31,10 @@ namespace visage {
   class Region {
   public:
     friend class Canvas;
+    friend class PostEffect;
 
     Region() = default;
+    ~Region();
 
     SubmitBatch* submitBatchAtPosition(int position) const {
       return shape_batcher_.batchAtIndex(position);
@@ -50,19 +52,24 @@ namespace visage {
       if (canvas_)
         region->setCanvas(canvas_);
 
-      region->setLayerIndex(layer_index_);
+      region->setLayerIndex(region->needsLayer() ? layer_index_ + 1 : layer_index_);
     }
 
     void removeRegion(Region* region);
+    void replaceRegion(Region* region, Region* replacement);
     void setCanvas(Canvas* canvas);
 
     void setBounds(int x, int y, int width, int height) {
       invalidate();
+      bool resized = width != width_ || height != height_;
       x_ = x;
       y_ = y;
       width_ = width;
       height_ = height;
-      setupIntermediateRegion();
+      if (resized)
+        setupIntermediateRegion();
+      else if (intermediate_region_)
+        intermediate_region_->setBounds(x_, y_, width_, height_);
       invalidate();
     }
 
@@ -91,11 +98,9 @@ namespace visage {
     int backdropCountChildren() const { return backdrop_count_children_; }
     int computeBackdropCount(int current = 0);
     bool shouldDraw(int backdrop_count) {
-      if (backdrop_count_ == backdrop_count)
-        return true;
       if (intermediate_region_)
-        return backdrop_count_ < backdrop_count && backdrop_count_children_ >= backdrop_count;
-      return false;
+        return backdrop_count_children_ == backdrop_count;
+      return backdrop_count_ == backdrop_count;
     }
 
     void invalidateRect(IBounds rect);
@@ -111,16 +116,29 @@ namespace visage {
     void setupIntermediateRegion();
     void setNeedsLayer(bool needs_layer);
 
-    void setPostEffect(PostEffect* post_effect) {
-      post_effect_ = post_effect;
+    void setPostEffect(PostEffect* post_effect);
+    PostEffect* postEffect() const { return post_effect_; }
+
+    void setAlpha(float alpha) {
+      alpha_ = alpha;
       setupIntermediateRegion();
     }
-    PostEffect* postEffect() const { return post_effect_; }
+
+    void setLayerBlendMode(BlendMode blend_mode) {
+      layer_blend_mode_ = blend_mode;
+      setupIntermediateRegion();
+    }
 
     void setBackdropEffect(PostEffect* backdrop_effect);
     PostEffect* backdropEffect() const { return backdrop_effect_; }
 
     bool needsLayer() const { return intermediate_region_.get(); }
+    void setMaskedRegion(Region* region) { masked_region_ = region; }
+    Region* maskedRegion() const { return masked_region_; }
+    bool isBackdropRoot() const {
+      return needsLayer() && (masked_region_ || post_effect_ || backdrop_effect_ ||
+                              alpha_ != 1.0f || layer_blend_mode_ != BlendMode::Alpha);
+    }
     Region* intermediateRegion() const { return intermediate_region_.get(); }
 
     const PackedBrush* addBrush(GradientAtlas* atlas, const Brush& brush) {
@@ -140,6 +158,9 @@ namespace visage {
     void setLayerIndex(int layer_index);
     void incrementLayer() { setLayerIndex(layer_index_ + 1); }
     void decrementLayer() { setLayerIndex(layer_index_ - 1); }
+    void attachEffect(PostEffect* effect);
+    void detachEffect(PostEffect* effect);
+    void removeEffect(PostEffect* effect);
 
     Text* addText(const String& string, const Font& font, Font::Justification justification) {
       text_store_.push_back(std::make_unique<Text>(string, font, justification));
@@ -168,6 +189,9 @@ namespace visage {
     Region* parent_ = nullptr;
     PostEffect* post_effect_ = nullptr;
     PostEffect* backdrop_effect_ = nullptr;
+    float alpha_ = 1.0f;
+    Region* masked_region_ = nullptr;
+    BlendMode layer_blend_mode_ = BlendMode::Alpha;
     ShapeBatcher shape_batcher_;
     std::vector<std::unique_ptr<PackedBrush>> brushes_;
     std::vector<std::unique_ptr<PackedBrush>> old_brushes_;
