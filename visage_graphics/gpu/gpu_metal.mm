@@ -241,6 +241,7 @@ namespace visage::gpu {
       if (queue_ == nil)
         return false;
 
+#if !VISAGE_IOS
       std::shared_ptr<SharedState> state = state_;
       id<MTLDevice> __weak watched = device_;
       MTLCopyAllDevicesWithObserver(&device_observer_, ^(id<MTLDevice> device, MTLDeviceNotificationName name) {
@@ -249,6 +250,7 @@ namespace visage::gpu {
         if (removed && device == watched)
           state->device_lost = true;
       });
+#endif
 
       caps.renderer = RendererType::Metal;
       caps.origin_bottom_left = false;
@@ -278,10 +280,12 @@ namespace visage::gpu {
         command_buffer_ = nil;
       }
 
+#if !VISAGE_IOS
       if (device_observer_) {
         MTLRemoveDeviceObserver(device_observer_);
         device_observer_ = nil;
       }
+#endif
 
       if (state_) {
         int acquired = 0;
@@ -1211,7 +1215,9 @@ namespace visage::gpu {
     id<MTLCommandBuffer> command_buffer_ = nil;
     id<MTLBlitCommandEncoder> update_encoder_ = nil;
     std::shared_ptr<SharedState> state_;
+#if !VISAGE_IOS
     id<NSObject> device_observer_ = nil;
+#endif
     int frame_slot_ = 0;
 
     std::vector<Texture> textures_;
