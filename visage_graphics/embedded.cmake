@@ -21,6 +21,11 @@ elseif (NOT TARGET VisageShaderCompilerHost)
 
   set(VISAGE_SHADER_COMPILER_ARGS -DCMAKE_BUILD_TYPE=Release)
   list(APPEND VISAGE_SHADER_COMPILER_ARGS -DCMAKE_TOOLCHAIN_FILE=)
+  # An iOS build under Xcode configures this from a script phase whose SDKROOT names the iOS SDK, and CMake would
+  # take that as the host's. This executable has to run here.
+  if (CMAKE_HOST_SYSTEM_NAME STREQUAL "Darwin")
+    list(APPEND VISAGE_SHADER_COMPILER_ARGS -DCMAKE_OSX_SYSROOT:STRING=macosx)
+  endif ()
   if (CMAKE_CXX_COMPILER_LAUNCHER)
     list(APPEND VISAGE_SHADER_COMPILER_ARGS -DCMAKE_CXX_COMPILER_LAUNCHER=${CMAKE_CXX_COMPILER_LAUNCHER}
          -DCMAKE_C_COMPILER_LAUNCHER=${CMAKE_CXX_COMPILER_LAUNCHER})
