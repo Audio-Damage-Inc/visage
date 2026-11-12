@@ -201,7 +201,10 @@ TEST_CASE("Popup menus draw with their palette's colors and sizes", "[integratio
   palette.setColor(PopupMenu::PopupMenuSelection, kSelection);
   palette.setColor(PopupMenu::PopupMenuSeparator, kSeparator);
   palette.setValue(PopupMenu::PopupOptionHeight, 30.0f);
-  palette.setValue(PopupMenu::PopupSelectionPadding, 8.0f);
+  palette.setValue(PopupMenu::PopupMinWidth, 175.0f);
+  palette.setValue(PopupMenu::PopupVerticalPadding, 8.0f);
+  palette.setValue(PopupMenu::PopupSelectionPadding, 0.0f);
+  palette.setValue(PopupMenu::PopupSelectionRounding, 0.0f);
   palette.setValue(PopupMenu::PopupBorderWidth, 3.0f);
   palette.setValue(PopupMenu::PopupSeparatorHeight, 12.0f);
   palette.setValue(PopupMenu::PopupSeparatorThickness, 4.0f);
@@ -235,7 +238,63 @@ TEST_CASE("Popup menus draw with their palette's colors and sizes", "[integratio
   REQUIRE(argb(100, 64) == kSeparator);
   REQUIRE(argb(100, 67) == kBackground);
   REQUIRE(argb(150, 85) == kSelection);
+  REQUIRE(argb(24, 85) == kSelection);
+  REQUIRE(argb(190, 85) == kSelection);
+  REQUIRE(argb(21, 85) == kBorder);
   REQUIRE(argb(100, 104) == kBackground);
+}
+
+TEST_CASE("Popup menu selections follow the menu's corners and the menu casts a shadow",
+          "[integration]") {
+  static constexpr unsigned int kBackground = 0xff102030;
+  static constexpr unsigned int kSelection = 0xff40c060;
+  static constexpr unsigned int kShadow = 0xffe04080;
+
+  Palette palette;
+  palette.setColor(PopupMenu::PopupMenuBackground, kBackground);
+  palette.setColor(PopupMenu::PopupMenuSelection, kSelection);
+  palette.setColor(PopupMenu::PopupMenuShadow, kShadow);
+  palette.setValue(PopupMenu::PopupOptionHeight, 30.0f);
+  palette.setValue(PopupMenu::PopupMinWidth, 160.0f);
+  palette.setValue(PopupMenu::PopupVerticalPadding, 0.0f);
+  palette.setValue(PopupMenu::PopupSelectionPadding, 0.0f);
+  palette.setValue(PopupMenu::PopupSelectionRounding, 0.0f);
+  palette.setValue(PopupMenu::PopupRounding, 12.0f);
+  palette.setValue(PopupMenu::PopupBorderWidth, 0.0f);
+  palette.setValue(PopupMenu::PopupShadowWidth, 16.0f);
+  palette.setValue(PopupMenu::PopupShadowOffset, 4.0f);
+
+  ApplicationEditor editor;
+  editor.setPalette(&palette);
+  editor.setWindowless(240, 140);
+
+  PopupMenu menu;
+  menu.addOption(1, "One");
+  menu.addOption(2, "Two");
+  menu.show(&editor, { 20, 20 });
+
+  auto* popup = dynamic_cast<PopupMenuFrame*>(editor.topParentFrame()->children().back());
+  REQUIRE(popup);
+  auto* list = dynamic_cast<PopupList*>(popup->children().front());
+  REQUIRE(list);
+  REQUIRE(list->bounds() == Bounds(20, 20, 160, 60));
+  list->setHoverFromPosition(Point(10, list->yForIndex(0) + 5));
+  REQUIRE(list->hoverIndex() == 0);
+
+  editor.drawWindow();
+  editor.drawWindow();
+  const Screenshot& screenshot = editor.takeScreenshot();
+  auto argb = [&screenshot](int x, int y) { return screenshot.sample(x, y).toARGB(); };
+  REQUIRE(argb(100, 35) == kSelection);
+  REQUIRE(argb(32, 21) == kSelection);
+  REQUIRE(argb(20, 20) != kSelection);
+  REQUIRE(argb(178, 20) != kSelection);
+  REQUIRE(argb(100, 65) == kBackground);
+
+  Color empty = screenshot.sample(230, 135);
+  Color shadow = screenshot.sample(100, 84);
+  REQUIRE(shadow.toARGB() != empty.toARGB());
+  REQUIRE(shadow.red() > shadow.green());
 }
 
 TEST_CASE("Animated graph lines", "[integration]") {
@@ -2708,4 +2767,29 @@ TEST_CASE("Shader backdrop effects sample what's behind the frame", "[integratio
       glass.invalidate();
     }
   }
+}
+
+TEST_CASE("Custom shaders read the data drawn with them", "[integration]") {
+  Canvas canvas;
+  canvas.setWindowless(80, 40);
+  canvas.setColor(0xff000000);
+  canvas.fill(0, 0, 80, 40);
+
+  Shader shader(Rectangle::vertexShader(), test_shaders::fs_test_shader_data, BlendMode::Alpha);
+  float row[] = { 0.0f, 1.0f, 0.0f, 1.0f };
+  float grid[] = { 1.0f, 0.0f, 0.0f, 1.0f };
+  canvas.shader(&shader, 0, 0, 40, 40, row, 4);
+  canvas.shader(&shader, 40, 0, 40, 40, grid, 2, 2);
+
+  const Screenshot& screenshot = canvas.takeScreenshot();
+  for (int i = 0; i < 4; ++i) {
+    INFO("column " << i);
+    int expected = i % 2 ? 0xff : 0x00;
+    REQUIRE(screenshot.sample(i * 10 + 5, 20).hexRed() == expected);
+    REQUIRE(screenshot.sample(i * 10 + 5, 20).hexBlue() == 0xff - expected);
+  }
+  REQUIRE(screenshot.sample(50, 10).hexRed() == 0xff);
+  REQUIRE(screenshot.sample(70, 10).hexRed() == 0x00);
+  REQUIRE(screenshot.sample(50, 30).hexRed() == 0x00);
+  REQUIRE(screenshot.sample(70, 30).hexRed() == 0xff);
 }

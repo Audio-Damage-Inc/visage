@@ -67,6 +67,7 @@ namespace visage {
 
     void clearDrawnShapes();
     int submit(int submit_pass = 0);
+    void invalidateBackdropCounts() { backdrop_count_ = -1; }
 
     const Screenshot& takeScreenshot();
     const Screenshot& screenshot() const;
@@ -100,6 +101,8 @@ namespace visage {
     void setLogicalPixelScale() { state_.scale = dpi_scale_; }
 
     float dpiScale() const { return dpi_scale_; }
+    void setDithering(bool dithering);
+    bool dithering() const { return dithering_; }
     void updateTime(double time);
     double time() const { return render_time_; }
     double deltaTime() const { return delta_time_; }
@@ -477,6 +480,19 @@ namespace visage {
     }
 
     template<typename T1, typename T2, typename T3, typename T4>
+    void shader(Shader* shader, const T1& x, const T2& y, const T3& width, const T4& height,
+                const float* data, int data_width, int data_height = 1) {
+      if (data == nullptr || data_width <= 0 || data_height <= 0) {
+        this->shader(shader, x, y, width, height);
+        return;
+      }
+
+      addShape(ShaderDataWrapper(state_.clamp, state_.brush, state_.x + pixels(x),
+                                 state_.y + pixels(y), pixels(width), pixels(height), shader, data,
+                                 data_width, data_height, dataAtlas()));
+    }
+
+    template<typename T1, typename T2, typename T3, typename T4>
     void fill(const Path& path, const T1& x, const T2& y, const T3& width, const T4& height) {
       if (path.numPoints() == 0)
         return;
@@ -828,11 +844,13 @@ namespace visage {
     Renderer::Reference renderer_reference_;
     Palette* palette_ = nullptr;
     float dpi_scale_ = 1.0f;
+    bool dithering_ = false;
     double render_time_ = 0.0;
     double delta_time_ = 0.0;
     int render_frame_ = 0;
     int last_skipped_frame_ = 0;
     uint32_t contents_generation_ = 0;
+    int backdrop_count_ = -1;
 
     std::vector<State> state_memory_;
     State state_;
